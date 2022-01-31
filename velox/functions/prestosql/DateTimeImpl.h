@@ -15,7 +15,10 @@
  */
 #pragma once
 
+#include <chrono>
 #include <optional>
+#include "velox/external/date/date.h"
+#include "velox/type/Date.h"
 #include "velox/type/Timestamp.h"
 
 namespace facebook::velox::functions {
@@ -59,5 +62,110 @@ FOLLY_ALWAYS_INLINE std::optional<Timestamp> fromUnixtime(double unixtime) {
   auto seconds = std::floor(unixtime);
   auto nanos = unixtime - seconds;
   return Timestamp(seconds, nanos * kNanosecondsInSecond);
+}
+
+namespace {
+enum class DateTimeUnit {
+  kMillisecond,
+  kSecond,
+  kMinute,
+  kHour,
+  kDay,
+  kMonth,
+  kQuarter,
+  kYear
+};
+} // namespace
+
+FOLLY_ALWAYS_INLINE Date
+addToDate(const Date& date, const DateTimeUnit& unit, const int32_t value) {
+  // TODO(gaoge): Handle overflow and underflow with 64-bit representation
+  if (value == 0) {
+    return Date(date.days());
+  }
+
+  const std::chrono::time_point<std::chrono::system_clock, date::days> inDate(
+      date::days(date.days()));
+  std::chrono::time_point<std::chrono::system_clock, date::days> outDate;
+
+  if (unit == DateTimeUnit::kDay) {
+    outDate = inDate + date::days(value);
+  } else {
+    const date::year_month_day calInDate(inDate);
+    date::year_month_day calOutDate;
+
+    if (unit == DateTimeUnit::kMonth) {
+      calOutDate = calInDate + date::months(value);
+    } else if (unit == DateTimeUnit::kQuarter) {
+      calOutDate = calInDate + date::months(3 * value);
+    } else if (unit == DateTimeUnit::kYear) {
+      calOutDate = calInDate + date::years(value);
+    } else {
+      VELOX_UNREACHABLE();
+    }
+
+    if (!calOutDate.ok()) {
+      calOutDate = calOutDate.year() / calOutDate.month() / date::last;
+    }
+    outDate = date::sys_days{calOutDate};
+  }
+
+  return Date(outDate.time_since_epoch().count());
+}
+
+FOLLY_ALWAYS_INLINE Timestamp addToTimestamp(
+    const Timestamp& timestamp,
+    const DateTimeUnit& unit,
+    const int32_t value) {
+  // TODO(gaoge): Handle overflow and underflow with 64-bit representation
+  if (value == 0) {
+    return Timestamp(timestamp.getSeconds(), timestamp.getNanos());
+  }
+
+  const std::chrono::
+      time_point<std::chrono::system_clock, std::chrono::milliseconds>
+          inTimestamp(std::chrono::milliseconds(timestamp.toMillis()));
+  std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds>
+      outTimestamp;
+
+  switch (unit) {
+    case DateTimeUnit::kYear:
+    case DateTimeUnit::kQuarter:
+    case DateTimeUnit::kMonth:
+    case DateTimeUnit::kDay: {
+      const Date inDate(
+          std::chrono::duration_cast<date::days>(inTimestamp.time_since_epoch())
+              .count());
+      const Date outDate = addToDate(inDate, unit, value);
+
+      outTimestamp = inTimestamp + date::days(outDate.days() - inDate.days());
+      break;
+    }
+    case DateTimeUnit::kHour: {
+      outTimestamp = inTimestamp + std::chrono::hours(value);
+      break;
+    }
+    case DateTimeUnit::kMinute: {
+      outTimestamp = inTimestamp + std::chrono::minutes(value);
+      break;
+    }
+    case DateTimeUnit::kSecond: {
+      outTimestamp = inTimestamp + std::chrono::seconds(value);
+      break;
+    }
+    case DateTimeUnit::kMillisecond: {
+      outTimestamp = inTimestamp + std::chrono::milliseconds(value);
+      break;
+    }
+    default:
+      VELOX_UNREACHABLE();
+  }
+
+  Timestamp tmpMsTimestamp =
+      Timestamp::fromMillis(outTimestamp.time_since_epoch().count());
+  return Timestamp(
+      tmpMsTimestamp.getSeconds(),
+      tmpMsTimestamp.getNanos() +
+          timestamp.getNanos() % kNanosecondsInMillisecond);
 }
 } // namespace facebook::velox::functions

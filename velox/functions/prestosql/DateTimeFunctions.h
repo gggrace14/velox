@@ -331,19 +331,10 @@ struct MillisecondFunction {
 };
 
 namespace {
-enum class DateTimeUnit {
-  kSecond,
-  kMinute,
-  kHour,
-  kDay,
-  kMonth,
-  kQuarter,
-  kYear
-};
-
 inline std::optional<DateTimeUnit> fromDateTimeUnitString(
     const StringView& unitString,
     bool throwIfInvalid) {
+  static const StringView kMillisecond("millisecond");
   static const StringView kSecond("second");
   static const StringView kMinute("minute");
   static const StringView kHour("hour");
@@ -352,6 +343,9 @@ inline std::optional<DateTimeUnit> fromDateTimeUnitString(
   static const StringView kQuarter("quarter");
   static const StringView kYear("year");
 
+  if (unitString == kMillisecond) {
+    return DateTimeUnit::kMillisecond;
+  }
   if (unitString == kSecond) {
     return DateTimeUnit::kSecond;
   }
@@ -442,6 +436,10 @@ struct DateTruncFunction {
     const auto unit = unit_.has_value()
         ? unit_.value()
         : fromDateTimeUnitString(unitString, true /*throwIfInvalid*/).value();
+    if (unit == DateTimeUnit::kMillisecond) {
+      VELOX_USER_FAIL("{} is not a valid TIMESTAMP field", unitString);
+    }
+
     if (unit == DateTimeUnit::kSecond) {
       result = Timestamp(timestamp.getSeconds(), 0);
       return true;
@@ -478,6 +476,64 @@ struct DateTruncFunction {
     adjustDateTime(dateTime, unit);
 
     result = Date(timegm(&dateTime) / kSecondsInDay);
+    return true;
+  }
+};
+
+template <typename T>
+struct DateAddFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  std::optional<DateTimeUnit> unit_ = std::nullopt;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig& config,
+      const arg_type<Varchar>* unitString,
+      const int32_t* /*value*/,
+      const arg_type<Timestamp>* /*timestamp*/) {
+    if (unitString != nullptr) {
+      unit_ = fromDateTimeUnitString(*unitString, false /*throwIfInvalid*/);
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig& /*config*/,
+      const arg_type<Varchar>* unitString,
+      const int32_t* /*value*/,
+      const arg_type<Date>* /*date*/) {
+    if (unitString != nullptr) {
+      unit_ = fromDateTimeUnitString(*unitString, false /*throwIfInvalid*/);
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Timestamp>& result,
+      const arg_type<Varchar>& unitString,
+      const int32_t value,
+      const arg_type<Timestamp>& timestamp) {
+    const auto unit = unit_.has_value()
+        ? unit_.value()
+        : fromDateTimeUnitString(unitString, true /*throwIfInvalid*/).value();
+
+    result = addToTimestamp(timestamp, unit, value);
+    return true;
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Date>& result,
+      const arg_type<Varchar>& unitString,
+      const int32_t value,
+      const arg_type<Date>& date) {
+    const auto unit = unit_.has_value()
+        ? unit_.value()
+        : fromDateTimeUnitString(unitString, true /*throwIfInvalid*/).value();
+
+    if (unit == DateTimeUnit::kMillisecond || unit == DateTimeUnit::kSecond ||
+        unit == DateTimeUnit::kMinute || unit == DateTimeUnit::kHour) {
+      VELOX_USER_FAIL("{} is not a valid DATE field", unitString);
+    }
+
+    result = addToDate(date, unit, value);
     return true;
   }
 };
