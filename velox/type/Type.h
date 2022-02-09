@@ -1040,6 +1040,8 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
       return TEMPLATE_FUNC<::facebook::velox::TypeKind::UNKNOWN>(__VA_ARGS__); \
     } else if ((typeKind) == ::facebook::velox::TypeKind::OPAQUE) {            \
       return TEMPLATE_FUNC<::facebook::velox::TypeKind::OPAQUE>(__VA_ARGS__);  \
+    } else if ((typeKind) == ::facebook::velox::TypeKind::ROW) {               \
+      return TEMPLATE_FUNC<::facebook::velox::TypeKind::ROW>(__VA_ARGS__);     \
     } else {                                                                   \
       return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(                               \
           TEMPLATE_FUNC, typeKind, __VA_ARGS__);                               \
