@@ -318,7 +318,7 @@ class ReaderOptions {
   velox::dwrf::BufferedInputFactory* bufferedInputFactory_ = nullptr;
 
  public:
-  static constexpr int32_t kDefaultLoadQuantum = 8 << 20; // 8MB
+  static constexpr int32_t kDefaultLoadQuantum = 1 << 20; // 8MB
   static constexpr int32_t kDefaultCoalesceDistance = 512 << 10; // 512K
 
   ReaderOptions(
