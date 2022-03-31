@@ -17,6 +17,7 @@
 
 #include <memory>
 
+#include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/dwio/common/InputStream.h"
 #include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/dwrf/common/CachedBufferedInput.h"
@@ -276,7 +277,7 @@ HiveDataSource::HiveDataSource(
 }
 
 namespace {
-bool testFilters(
+bool testFiltersOnFile(
     common::ScanSpec* scanSpec,
     dwio::common::Reader* reader,
     const std::string& filePath) {
@@ -381,6 +382,16 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
 
   VLOG(1) << "Adding split " << split_->toString();
 
+  // Check filters on bucket number and see if the whole split/bucket can be
+  // skipped
+  if (!testFiltersOnBucket(
+          scanSpec_.get(), split_->bucketProperty, split_->readBucketNumber)) {
+    emptySplit_ = true;
+    ++runtimeStats_.skippedSplits;
+    runtimeStats_.skippedSplitBytes += split_->length;
+    return;
+  }
+
   fileHandle_ = fileHandleFactory_->generate(split_->filePath);
   // For DataCache and no cache, the stream keeps track of IO.
   auto asyncCache = dynamic_cast<cache::AsyncDataCache*>(mappedMemory_);
@@ -440,7 +451,7 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   }
 
   // Check filters and see if the whole split can be skipped
-  if (!testFilters(scanSpec_.get(), reader_.get(), split_->filePath)) {
+  if (!testFiltersOnFile(scanSpec_.get(), reader_.get(), split_->filePath)) {
     emptySplit_ = true;
     ++runtimeStats_.skippedSplits;
     runtimeStats_.skippedSplitBytes += split_->length;
@@ -615,6 +626,143 @@ void HiveDataSource::setPartitionValue(
   auto constValue = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
       convertFromString, it->second->dataType()->kind(), value);
   setConstantValue(spec, constValue);
+}
+
+namespace {
+bool isValuesFilter(const common::Filter* filter) {
+  if (!filter) {
+    return false;
+  }
+  switch (filter->kind()) {
+    case common::FilterKind::kBigintRange:
+      return reinterpret_cast<const common::BigintRange*>(filter)
+          ->isSingleValue();
+    case common::FilterKind::kBytesRange:
+      return reinterpret_cast<const common::BytesRange*>(filter)
+          ->isSingleValue();
+    case common::FilterKind::kBigintValuesUsingHashTable:
+    case common::FilterKind::kBigintValuesUsingBitmask:
+    case common::FilterKind::kBytesValues:
+      return true;
+    default:
+      return false;
+  }
+}
+} // namespace
+
+bool HiveDataSource::testFiltersOnBucket(
+    const common::ScanSpec* scanSpec,
+    const std::optional<HiveBucketProperty>& bucketProperty,
+    std::optional<int32_t> bucketNumber) {
+  if (!bucketNumber.has_value() || !bucketProperty.has_value()) {
+    // The table is not bucketed
+    return true;
+  }
+  // Only test filters when the table has a single bucketed-by column for now
+  if (bucketProperty.value().bucketedBy.size() != 1) {
+    return true;
+  }
+
+  // If there is no filter on the bucketed-by column, return true.
+  const common::ScanSpec* child =
+      scanSpec->childByName(bucketProperty.value().bucketedBy[0]);
+  if (!child) {
+    return true;
+  }
+  const common::Filter* filter = child->filter();
+  if (!filter) {
+    return true;
+  }
+
+  if (selectedBuckets_.empty()) {
+    struct Releaser {
+      void addRef() const {}
+      void release() const {}
+    };
+    auto& pool = memory::getProcessDefaultMemoryManager().getRoot();
+
+    auto buildInt64RowVector =
+        [&](std::shared_ptr<const std::vector<int64_t>> input) -> RowVectorPtr {
+      vector_size_t size = input->size();
+      BufferPtr values = BufferView<Releaser>::create(
+          reinterpret_cast<const uint8_t*>(input->data()),
+          size * sizeof(int64_t),
+          Releaser());
+      FlatVectorPtr<int64_t> vector = std::make_shared<FlatVector<int64_t>>(
+          &pool, BufferPtr(nullptr), size, values, std::vector<BufferPtr>{});
+      return std::make_shared<RowVector>(
+          &pool,
+          ROW({"c0"}, {BIGINT()}),
+          BufferPtr(nullptr),
+          size,
+          std::vector<VectorPtr>{vector});
+    };
+
+    auto buildStringViewRowVector =
+        [&](std::shared_ptr<const std::vector<StringView>> input)
+        -> RowVectorPtr {
+      vector_size_t size = input->size();
+      BufferPtr values = BufferView<Releaser>::create(
+          reinterpret_cast<const uint8_t*>(input->data()),
+          size * sizeof(StringView),
+          Releaser());
+      FlatVectorPtr<StringView> vector =
+          std::make_shared<FlatVector<StringView>>(
+              &pool,
+              BufferPtr(nullptr),
+              size,
+              values,
+              std::vector<BufferPtr>{});
+      return std::make_shared<RowVector>(
+          &pool,
+          ROW({"c0"}, {VARCHAR()}),
+          BufferPtr(nullptr),
+          size,
+          std::vector<VectorPtr>{vector});
+    };
+
+    RowVectorPtr input;
+    std::shared_ptr<const std::vector<int64_t>> int64Values;
+    std::shared_ptr<const std::vector<StringView>> stringValues;
+    switch (filter->kind()) {
+      case common::FilterKind::kBigintValuesUsingHashTable:
+      case common::FilterKind::kBigintValuesUsingBitmask:
+      case common::FilterKind::kBigintRange: {
+        int64Values = filter->int64Values();
+        if (!int64Values) {
+          return true;
+        }
+        input = buildInt64RowVector(int64Values);
+        break;
+      }
+      case common::FilterKind::kBytesValues:
+      case common::FilterKind::kBytesRange: {
+        stringValues = filter->stringValues();
+        if (!stringValues) {
+          return true;
+        }
+        input = buildStringViewRowVector(stringValues);
+        break;
+      }
+      default:
+        return true;
+    }
+
+    std::vector<uint32_t> buckets;
+    buckets.reserve(input->size());
+
+    std::vector<int> bucketToPartition(bucketProperty->bucketCount);
+    std::iota(bucketToPartition.begin(), bucketToPartition.end(), 0);
+    HivePartitionFunction(bucketProperty->bucketCount, bucketToPartition, {0})
+        .partition(*input, buckets);
+
+    selectedBuckets_.resize(bits::nwords(bucketProperty->bucketCount));
+    for (uint32_t bucket : buckets) {
+      bits::setBit(selectedBuckets_.data(), bucket, true);
+    }
+  }
+
+  return bits::isBitSet(selectedBuckets_.data(), bucketNumber.value());
 }
 
 std::unordered_map<std::string, int64_t> HiveDataSource::runtimeStats() {

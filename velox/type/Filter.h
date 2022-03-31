@@ -228,6 +228,14 @@ class Filter {
     VELOX_UNSUPPORTED("{}: mergeWith() is not supported.", toString());
   }
 
+  virtual std::shared_ptr<std::vector<int64_t>> int64Values() const {
+    VELOX_UNSUPPORTED("{}: int64Values() is not supported.", toString());
+  }
+
+  virtual std::shared_ptr<std::vector<StringView>> stringValues() const {
+    VELOX_UNSUPPORTED("{}: stringValues() is not supported.", toString());
+  }
+
   virtual std::string toString() const;
 
  protected:
@@ -613,6 +621,15 @@ class BigintRange final : public Filter {
 
   std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
 
+  std::shared_ptr<std::vector<int64_t>> int64Values() const override {
+    if (!isSingleValue_) {
+      return nullptr;
+    }
+    auto values = std::make_shared<std::vector<int64_t>>();
+    values->push_back(lower_);
+    return values;
+  }
+
   std::string toString() const final {
     return fmt::format(
         "BigintRange: [{}, {}] {}",
@@ -683,6 +700,10 @@ class BigintValuesUsingHashTable final : public Filter {
     return max_;
   }
 
+  std::shared_ptr<std::vector<int64_t>> int64Values() const override {
+    return std::make_shared<std::vector<int64_t>>(values_);
+  }
+
   std::string toString() const final {
     return fmt::format(
         "BigintValuesUsingHashTable: [{}, {}] {}",
@@ -745,6 +766,16 @@ class BigintValuesUsingBitmask final : public Filter {
   bool testInt64Range(int64_t min, int64_t max, bool hasNull) const final;
 
   std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
+
+  std::shared_ptr<std::vector<int64_t>> int64Values() const override {
+    auto values = std::make_shared<std::vector<int64_t>>();
+    for (int64_t bit = 0; bit < bitmask_.size(); bit++) {
+      if (bitmask_[bit]) {
+        values->push_back(bit);
+      }
+    }
+    return values;
+  }
 
  private:
   std::unique_ptr<Filter>
@@ -1124,6 +1155,15 @@ class BytesRange final : public AbstractRange {
     }
   }
 
+  std::shared_ptr<std::vector<StringView>> stringValues() const override {
+    if (!singleValue_) {
+      return nullptr;
+    }
+    auto values = std::make_shared<std::vector<StringView>>();
+    values->push_back(StringView(lower_));
+    return values;
+  }
+
   std::string toString() const final {
     return fmt::format(
         "BytesRange: {}{}, {}{} {}",
@@ -1236,6 +1276,12 @@ class BytesValues final : public Filter {
 
   const folly::F14FastSet<std::string>& values() const {
     return values_;
+  }
+
+  std::shared_ptr<std::vector<StringView>> stringValues() const override {
+    auto values = std::make_shared<std::vector<StringView>>(
+        values_.begin(), values_.end());
+    return values;
   }
 
  private:
