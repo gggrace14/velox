@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <iostream>
+
 #include "velox/exec/Exchange.h"
 #include "velox/exec/PartitionedOutputBufferManager.h"
 
@@ -325,6 +327,13 @@ RowVectorPtr Exchange::getOutput() {
   if (inputStream_->atEnd()) {
     currentPage_ = nullptr;
     inputStream_ = nullptr;
+  }
+
+  std::cout << "Operator getOutput: " << this->toString() << std::endl;
+  if (result_) {
+    for (int i = 0; i < result_->size(); ++i) {
+      std::cout << result_->toString(i) << std::endl;
+    }
   }
 
   return result_;

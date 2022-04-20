@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <iostream>
 
 #include "velox/exec/PartitionedOutput.h"
 #include "velox/exec/PartitionedOutputBufferManager.h"
@@ -155,6 +156,14 @@ void PartitionedOutput::estimateRowSizes() {
 
 void PartitionedOutput::addInput(RowVectorPtr input) {
   // TODO Report outputBytes as bytes after serialization
+
+  std::cout << "Operator addInput: " << this->toString() << std::endl;
+  if (input) {
+    for (int i = 0; i < input->size(); ++i) {
+      std::cout << input->toString(i) << std::endl;
+    }
+  }
+
   stats_.outputBytes += input->retainedSize();
   stats_.outputPositions += input->size();
 
@@ -224,6 +233,13 @@ void PartitionedOutput::collectNullRows() {
 }
 
 RowVectorPtr PartitionedOutput::getOutput() {
+  std::cout << "Operator getOutput: " << this->toString() << std::endl;
+  if (output_) {
+    for (int i = 0; i < output_->size(); ++i) {
+      std::cout << output_->toString(i) << std::endl;
+    }
+  }
+
   if (finished_) {
     return nullptr;
   }
@@ -286,6 +302,8 @@ RowVectorPtr PartitionedOutput::getOutput() {
 
     bufferManager->noMoreData(operatorCtx_->task()->taskId());
     finished_ = true;
+
+    std::cout << "finished_ is True for " << this->toString() << std::endl;
   }
   // The input is fully processed, drop the reference to allow reuse.
   input_ = nullptr;

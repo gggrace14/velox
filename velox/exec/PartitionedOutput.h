@@ -122,6 +122,10 @@ class PartitionedOutput : public Operator {
       VELOX_CHECK(keyChannels_.empty());
       VELOX_CHECK_NULL(partitionFunction_);
     }
+    std::cout << toString()
+              << " ||| Input: " << planNode->inputType()->toString()
+              << ", Output: " << planNode->outputType()->toString()
+              << std::endl;
   }
 
   void addInput(RowVectorPtr input) override;

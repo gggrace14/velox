@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <iostream>
+
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/common/memory/ByteStream.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
@@ -49,11 +51,14 @@ int64_t computeChecksum(
   boost::crc_32_type crc32;
 
   auto remainingBytes = uncompressedSize;
+  std::cout << "====Before Loop=====" << std::endl;
   while (remainingBytes > 0) {
     auto data = source->nextView(remainingBytes);
+    std::cout << data << std::endl;
     crc32.process_bytes(data.data(), data.size());
     remainingBytes -= data.size();
   }
+  std::cout << "====After Loop=====" << std::endl;
 
   crc32.process_bytes(&codecMarker, 1);
   crc32.process_bytes(&numRows, 4);

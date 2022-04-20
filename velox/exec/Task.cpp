@@ -218,6 +218,8 @@ void Task::start(
       &self->driverFactories_,
       maxDrivers);
 
+  std::cout << self->planFragment_.planNode->toString(true, true) << std::endl;
+
   // Keep one exchange client per pipeline (NULL if not used).
   const auto numPipelines = self->driverFactories_.size();
   self->exchangeClients_.resize(numPipelines);
@@ -315,6 +317,11 @@ void Task::start(
     // As some splits could have been added before the task start, ensure we
     // start running drivers for them.
     self->ensureSplitGroupsAreBeingProcessedLocked(self);
+  }
+
+  std::cout << "Task: " << self->taskId() << ", Drivers: " << std::endl;
+  for (int i = 0; i < self->drivers_.size(); ++i) {
+    std::cout << self->drivers_[i]->toString() << std::endl;
   }
 }
 

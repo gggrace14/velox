@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 #pragma once
+#include <iostream>
+
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/core/PlanNode.h"
@@ -236,6 +238,7 @@ class Operator {
   // the next call(s) to getOutput. Not used if operator is a source operator,
   // e.g. the first operator in the pipeline.
   virtual void noMoreInput() {
+    std::cout << "noMoreInput for " << this->toString() << std::endl;
     noMoreInput_ = true;
   }
 
