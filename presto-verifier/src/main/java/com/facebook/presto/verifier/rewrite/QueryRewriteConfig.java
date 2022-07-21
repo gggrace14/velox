@@ -30,6 +30,7 @@ public class QueryRewriteConfig
 {
     private QualifiedName tablePrefix = QualifiedName.of("tmp_verifier");
     private Map<String, Object> tableProperties = ImmutableMap.of();
+    private boolean rewriteNonDeterministicColumns;
 
     @NotNull
     public QualifiedName getTablePrefix()
@@ -66,6 +67,19 @@ public class QueryRewriteConfig
         catch (IOException e) {
             throw new RuntimeException(e);
         }
+        return this;
+    }
+
+    public boolean isRewriteNonDeterministicColumns()
+    {
+        return rewriteNonDeterministicColumns;
+    }
+
+    @ConfigDescription("Rewrite nondeterministic columns")
+    @Config("rewrite-nondeterministic-columns")
+    public QueryRewriteConfig setRewriteNonDeterministicColumns(boolean rewriteNonDeterministicColumns)
+    {
+        this.rewriteNonDeterministicColumns = rewriteNonDeterministicColumns;
         return this;
     }
 }

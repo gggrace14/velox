@@ -294,6 +294,136 @@ public class TestQueryRewriter
                         "    CAST(ROW (NULL) AS ROW(BIGINT))");
     }
 
+    @Test
+    public void testRewriteNonDeterministicColumns()
+    {
+        // Test rewriting columns with nested Function calls
+        assertCreateTableAs(
+                getQueryRewriter().rewriteQuery(
+                        "SELECT\n" +
+                                "    IF(APPROX_DISTINCT(b) > 1, TRUE, FALSE)\n" +
+                                "FROM test_table",
+                        CONTROL).getQuery(),
+                "SELECT\n" +
+                        "    IF(COUNT(b) > 1, TRUE, FALSE)\n" +
+                        "FROM test_table");
+
+        // Test rewriting columns in Join
+        assertCreateTableAs(
+                getQueryRewriter().rewriteQuery(
+                        "SELECT\n" +
+                                "    x.b,\n" +
+                                "    y.a\n" +
+                                "FROM test_table x\n" +
+                                "JOIN (\n" +
+                                "    SELECT\n" +
+                                "        b,\n" +
+                                "        APPROX_PERCENTILE(a, 0.5) AS a\n" +
+                                "    FROM test_table\n" +
+                                "    GROUP BY\n" +
+                                "        1\n" +
+                                ") y\n" +
+                                "    ON (x.b = y.b)",
+                        CONTROL).getQuery(),
+                "SELECT\n" +
+                        "    x.b,\n" +
+                        "    y.a\n" +
+                        "FROM test_table x\n" +
+                        "JOIN (\n" +
+                        "    SELECT\n" +
+                        "        b,\n" +
+                        "        AVG(a) AS a\n" +
+                        "    FROM test_table\n" +
+                        "    GROUP BY\n" +
+                        "        1\n" +
+                        ") y\n" +
+                        "    ON (x.b = y.b)");
+
+        // Test rewriting columns in TableSubquery
+        assertCreateTableAs(
+                getQueryRewriter().rewriteQuery(
+                        "SELECT cnt\n" +
+                                "FROM (\n" +
+                                "    SELECT\n" +
+                                "        APPROX_DISTINCT(b) AS cnt\n" +
+                                "    FROM test_table\n" +
+                                ") x",
+                        CONTROL).getQuery(),
+                "SELECT cnt\n" +
+                        "FROM (\n" +
+                        "    SELECT\n" +
+                        "        COUNT(b) AS cnt\n" +
+                        "    FROM test_table\n" +
+                        ") x");
+
+        // Test rewriting columns in With
+        assertCreateTableAs(
+                getQueryRewriter().rewriteQuery(
+                        "WITH x AS (\n" +
+                                "    SELECT\n" +
+                                "        APPROX_DISTINCT(b) AS cnt\n" +
+                                "    FROM test_table\n" +
+                                ")\n" +
+                                "SELECT\n" +
+                                "    cnt\n" +
+                                "FROM x", CONTROL).getQuery(),
+                "WITH x AS (\n" +
+                        "    SELECT\n" +
+                        "        COUNT(b) AS cnt\n" +
+                        "    FROM test_table\n" +
+                        ")\n" +
+                        "SELECT\n" +
+                        "    cnt\n" +
+                        "FROM x");
+
+        // Test rewriting columns in Union
+        assertCreateTableAs(
+                getQueryRewriter().rewriteQuery(
+                        "SELECT\n" +
+                                "    *\n" +
+                                "FROM (\n" +
+                                "    SELECT\n" +
+                                "        b\n" +
+                                "    FROM test_table\n" +
+                                "    GROUP BY\n" +
+                                "        1\n" +
+                                "    HAVING\n" +
+                                "        APPROX_PERCENTILE(a, 1) > 0.5\n" +
+                                "\n" +
+                                "    UNION ALL\n" +
+                                "\n" +
+                                "    SELECT\n" +
+                                "        b\n" +
+                                "    FROM test_table\n" +
+                                "    GROUP BY\n" +
+                                "        1\n" +
+                                "    HAVING\n" +
+                                "        APPROX_PERCENTILE(a, 1) >= 0.5\n" +
+                                ") x",
+                        CONTROL).getQuery(),
+                "SELECT\n" +
+                        "    *\n" +
+                        "FROM (\n" +
+                        "    SELECT\n" +
+                        "        b\n" +
+                        "    FROM test_table\n" +
+                        "    GROUP BY\n" +
+                        "        1\n" +
+                        "    HAVING\n" +
+                        "        AVG(a) > 0.5\n" +
+                        "\n" +
+                        "    UNION ALL\n" +
+                        "\n" +
+                        "    SELECT\n" +
+                        "        b\n" +
+                        "    FROM test_table\n" +
+                        "    GROUP BY\n" +
+                        "        1\n" +
+                        "    HAVING\n" +
+                        "        AVG(a) >= 0.5\n" +
+                        ") x");
+    }
+
     private void assertShadowed(
             QueryRewriter queryRewriter,
             @Language("SQL") String query,

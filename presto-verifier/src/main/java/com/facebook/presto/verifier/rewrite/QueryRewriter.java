@@ -22,26 +22,55 @@ import com.facebook.presto.common.type.TypeManager;
 import com.facebook.presto.common.type.TypeSignature;
 import com.facebook.presto.common.type.TypeSignatureParameter;
 import com.facebook.presto.sql.parser.SqlParser;
+import com.facebook.presto.sql.tree.AliasedRelation;
 import com.facebook.presto.sql.tree.AllColumns;
+import com.facebook.presto.sql.tree.AstVisitor;
 import com.facebook.presto.sql.tree.Cast;
 import com.facebook.presto.sql.tree.CreateTable;
 import com.facebook.presto.sql.tree.CreateTableAsSelect;
 import com.facebook.presto.sql.tree.CreateView;
+import com.facebook.presto.sql.tree.Cube;
 import com.facebook.presto.sql.tree.DropTable;
 import com.facebook.presto.sql.tree.DropView;
+import com.facebook.presto.sql.tree.Except;
 import com.facebook.presto.sql.tree.Expression;
+import com.facebook.presto.sql.tree.ExpressionRewriter;
+import com.facebook.presto.sql.tree.ExpressionTreeRewriter;
+import com.facebook.presto.sql.tree.FunctionCall;
+import com.facebook.presto.sql.tree.GroupBy;
+import com.facebook.presto.sql.tree.GroupingElement;
+import com.facebook.presto.sql.tree.GroupingSets;
 import com.facebook.presto.sql.tree.Identifier;
 import com.facebook.presto.sql.tree.Insert;
+import com.facebook.presto.sql.tree.Intersect;
+import com.facebook.presto.sql.tree.Join;
+import com.facebook.presto.sql.tree.JoinCriteria;
+import com.facebook.presto.sql.tree.JoinOn;
+import com.facebook.presto.sql.tree.Lateral;
 import com.facebook.presto.sql.tree.LikeClause;
+import com.facebook.presto.sql.tree.Node;
+import com.facebook.presto.sql.tree.OrderBy;
 import com.facebook.presto.sql.tree.Property;
 import com.facebook.presto.sql.tree.QualifiedName;
 import com.facebook.presto.sql.tree.Query;
+import com.facebook.presto.sql.tree.QueryBody;
 import com.facebook.presto.sql.tree.QuerySpecification;
+import com.facebook.presto.sql.tree.Relation;
+import com.facebook.presto.sql.tree.Rollup;
+import com.facebook.presto.sql.tree.SampledRelation;
 import com.facebook.presto.sql.tree.Select;
 import com.facebook.presto.sql.tree.SelectItem;
 import com.facebook.presto.sql.tree.ShowCreate;
+import com.facebook.presto.sql.tree.SimpleGroupBy;
 import com.facebook.presto.sql.tree.SingleColumn;
+import com.facebook.presto.sql.tree.SortItem;
 import com.facebook.presto.sql.tree.Statement;
+import com.facebook.presto.sql.tree.TableSubquery;
+import com.facebook.presto.sql.tree.Union;
+import com.facebook.presto.sql.tree.Unnest;
+import com.facebook.presto.sql.tree.Values;
+import com.facebook.presto.sql.tree.With;
+import com.facebook.presto.sql.tree.WithQuery;
 import com.facebook.presto.verifier.framework.ClusterType;
 import com.facebook.presto.verifier.framework.QueryException;
 import com.facebook.presto.verifier.framework.QueryObjectBundle;
@@ -95,19 +124,22 @@ public class QueryRewriter
     private final PrestoAction prestoAction;
     private final Map<ClusterType, QualifiedName> prefixes;
     private final Map<ClusterType, List<Property>> tableProperties;
+    private final boolean rewriteNonDeterministicColumns;
 
     public QueryRewriter(
             SqlParser sqlParser,
             TypeManager typeManager,
             PrestoAction prestoAction,
             Map<ClusterType, QualifiedName> tablePrefixes,
-            Map<ClusterType, List<Property>> tableProperties)
+            Map<ClusterType, List<Property>> tableProperties,
+            boolean rewriteNonDeterministicColumns)
     {
         this.sqlParser = requireNonNull(sqlParser, "sqlParser is null");
         this.typeManager = requireNonNull(typeManager, "typeManager is null");
         this.prestoAction = requireNonNull(prestoAction, "prestoAction is null");
         this.prefixes = ImmutableMap.copyOf(tablePrefixes);
         this.tableProperties = ImmutableMap.copyOf(tableProperties);
+        this.rewriteNonDeterministicColumns = rewriteNonDeterministicColumns;
     }
 
     public QueryObjectBundle rewriteQuery(@Language("SQL") String query, ClusterType clusterType)
@@ -159,6 +191,9 @@ public class QueryRewriter
             ResultSetMetaData metadata = getResultMetadata((Query) statement);
             List<Identifier> columnAliases = generateStorageColumnAliases(metadata);
             Query rewrite = rewriteNonStorableColumns((Query) statement, metadata);
+            if (rewriteNonDeterministicColumns) {
+                rewrite = (Query) (new NonDeterministicColumnRewriter().process(rewrite));
+            }
             return new QueryObjectBundle(
                     temporaryTableName,
                     ImmutableList.of(),
@@ -394,5 +429,272 @@ public class QueryRewriter
                 .stream()
                 .map(entry -> new Property(new Identifier(entry.getKey()), entry.getValue()))
                 .collect(toImmutableList());
+    }
+
+    private static class NonDeterministicColumnRewriter
+            extends AstVisitor<Node, Void>
+    {
+        private static class FunctionCallSubstitute
+        {
+            private final QualifiedName name;
+            private final List<Integer> originalArgumentIndices;
+
+            private FunctionCallSubstitute(QualifiedName name, List<Integer> originalArgumentIndices)
+            {
+                this.name = requireNonNull(name, "name is null");
+                this.originalArgumentIndices = ImmutableList.copyOf(requireNonNull(originalArgumentIndices, "originalArgumentIndices is null"));
+            }
+        }
+
+        private static final Map<QualifiedName, FunctionCallSubstitute> FUNCTION_CALL_SUBSTITUTE_LOOKUP = ImmutableMap.<QualifiedName, FunctionCallSubstitute>builder()
+                .put(QualifiedName.of("approx_percentile"), new FunctionCallSubstitute(QualifiedName.of("avg"), ImmutableList.of(1)))
+                .put(QualifiedName.of("approx_distinct"), new FunctionCallSubstitute(QualifiedName.of("count"), ImmutableList.of(1)))
+                .build();
+
+        @Override
+        protected Node visitExpression(Expression node, Void context)
+        {
+            return ExpressionTreeRewriter.rewriteWith(new ExpressionRewriter<Void>()
+            {
+                @Override
+                public Expression rewriteFunctionCall(FunctionCall node, Void context, ExpressionTreeRewriter<Void> treeRewriter)
+                {
+                    FunctionCall defaultRewrite = treeRewriter.defaultRewrite(node, context);
+
+                    if (!FUNCTION_CALL_SUBSTITUTE_LOOKUP.containsKey(node.getName())) {
+                        return defaultRewrite;
+                    }
+
+                    FunctionCallSubstitute substitute = FUNCTION_CALL_SUBSTITUTE_LOOKUP.get(node.getName());
+                    QualifiedName rewrittenName = substitute.name;
+                    List<Expression> rewrittenArguments = substitute.originalArgumentIndices.stream()
+                            .map(originalIndex -> {
+                                Expression originalArgument = node.getArguments().get(originalIndex - 1);
+                                return treeRewriter.rewrite(originalArgument, context);
+                            }).collect(toImmutableList());
+
+                    return new FunctionCall(rewrittenName, defaultRewrite.getWindow(), defaultRewrite.getFilter(), defaultRewrite.getOrderBy(),
+                            defaultRewrite.isDistinct(), defaultRewrite.isIgnoreNulls(), rewrittenArguments);
+                }
+            }, node);
+        }
+
+        @Override
+        protected Node visitQuery(Query node, Void context)
+        {
+            return new Query(
+                    node.getWith().map(with -> (With) process(with, context)),
+                    (QueryBody) process(node.getQueryBody(), context),
+                    node.getOrderBy().map(orderBy -> (OrderBy) process(node, context)),
+                    node.getOffset(),
+                    node.getLimit());
+        }
+
+        @Override
+        protected Node visitWith(With node, Void context)
+        {
+            return new With(
+                    node.isRecursive(),
+                    node.getQueries().stream()
+                            .map(withQuery -> (WithQuery) process(withQuery, context))
+                            .collect(toImmutableList()));
+        }
+
+        @Override
+        protected Node visitWithQuery(WithQuery node, Void context)
+        {
+            return new WithQuery(node.getName(), (Query) process(node.getQuery(), context), node.getColumnNames());
+        }
+
+        @Override
+        protected Node visitQuerySpecification(QuerySpecification node, Void context)
+        {
+            return new QuerySpecification(
+                    (Select) process(node.getSelect(), context),
+                    node.getFrom().map(from -> (Relation) process(from, context)),
+                    node.getWhere().map(where -> (Expression) process(where, context)),
+                    node.getGroupBy().map(groupBy -> (GroupBy) process(groupBy, context)),
+                    node.getHaving().map(having -> (Expression) process(having, context)),
+                    node.getOrderBy().map(orderBy -> (OrderBy) process(orderBy, context)),
+                    node.getOffset(),
+                    node.getLimit());
+        }
+
+        @Override
+        protected Node visitUnion(Union node, Void context)
+        {
+            return new Union(
+                    node.getRelations().stream()
+                            .map(relation -> (Relation) process(relation, context))
+                            .collect(toImmutableList()),
+                    node.isDistinct());
+        }
+
+        @Override
+        protected Node visitExcept(Except node, Void context)
+        {
+            return new Except(
+                    (Relation) process(node.getLeft(), context),
+                    (Relation) process(node.getRight(), context),
+                    node.isDistinct());
+        }
+
+        @Override
+        protected Node visitIntersect(Intersect node, Void context)
+        {
+            return new Intersect(
+                    node.getRelations().stream()
+                            .map(relation -> (Relation) process(relation, context))
+                            .collect(toImmutableList()),
+                    node.isDistinct());
+        }
+
+        @Override
+        protected Node visitJoin(Join node, Void context)
+        {
+            Optional<JoinCriteria> criteria = node.getCriteria();
+            if (criteria.isPresent() && criteria.get() instanceof JoinOn) {
+                criteria = Optional.of(new JoinOn(
+                        (Expression) process(((JoinOn) criteria.get()).getExpression(), context)));
+            }
+            return new Join(
+                    node.getType(),
+                    (Relation) process(node.getLeft(), context),
+                    (Relation) process(node.getRight(), context),
+                    criteria);
+        }
+
+        @Override
+        protected Node visitAliasedRelation(AliasedRelation node, Void context)
+        {
+            return new AliasedRelation(
+                    (Relation) process(node.getRelation(), context),
+                    node.getAlias(),
+                    node.getColumnNames());
+        }
+
+        @Override
+        protected Node visitSampledRelation(SampledRelation node, Void context)
+        {
+            return new SampledRelation(
+                    (Relation) process(node.getRelation(), context),
+                    node.getType(),
+                    (Expression) process(node.getSamplePercentage(), context));
+        }
+
+        @Override
+        protected Node visitTableSubquery(TableSubquery node, Void context)
+        {
+            return new TableSubquery((Query) process(node.getQuery(), context));
+        }
+
+        @Override
+        protected Node visitUnnest(Unnest node, Void context)
+        {
+            return new Unnest(
+                    node.getExpressions().stream()
+                            .map(expression -> (Expression) process(expression, context))
+                            .collect(toImmutableList()),
+                    node.isWithOrdinality());
+        }
+
+        @Override
+        protected Node visitLateral(Lateral node, Void context)
+        {
+            return new Lateral((Query) process(node.getQuery(), context));
+        }
+
+        @Override
+        protected Node visitValues(Values node, Void context)
+        {
+            return new Values(node.getRows().stream()
+                    .map(row -> (Expression) process(row, context))
+                    .collect(toImmutableList()));
+        }
+
+        @Override
+        protected Node visitSelect(Select node, Void context)
+        {
+            return new Select(
+                    node.isDistinct(),
+                    node.getSelectItems().stream()
+                            .map(item -> (SelectItem) process(item, context))
+                            .collect(toImmutableList()));
+        }
+
+        @Override
+        protected Node visitSingleColumn(SingleColumn node, Void context)
+        {
+            return new SingleColumn((Expression) process(node.getExpression()), node.getAlias());
+        }
+
+        @Override
+        protected Node visitGroupBy(GroupBy node, Void context)
+        {
+            return new GroupBy(
+                    node.isDistinct(),
+                    node.getGroupingElements().stream()
+                            .map(groupingElement -> (GroupingElement) process(groupingElement, context))
+                            .collect(toImmutableList()));
+        }
+
+        @Override
+        protected Node visitCube(Cube node, Void context)
+        {
+            return new Cube(
+                    node.getExpressions().stream()
+                            .map(column -> (Expression) process(column, context))
+                            .collect(toImmutableList()));
+        }
+
+        @Override
+        protected Node visitRollup(Rollup node, Void context)
+        {
+            return new Rollup(
+                    node.getExpressions().stream()
+                            .map(column -> (Expression) process(column, context))
+                            .collect(toImmutableList()));
+        }
+
+        @Override
+        protected Node visitSimpleGroupBy(SimpleGroupBy node, Void context)
+        {
+            return new SimpleGroupBy(
+                    node.getExpressions().stream()
+                            .map(column -> (Expression) process(column, context))
+                            .collect(toImmutableList()));
+        }
+
+        @Override
+        protected Node visitGroupingSets(GroupingSets node, Void context)
+        {
+            return new GroupingSets(
+                    node.getSets().stream()
+                            .map(expressionsList -> expressionsList.stream()
+                                    .map(expression -> (Expression) process(expression, context))
+                                    .collect(toImmutableList()))
+                            .collect(toImmutableList()));
+        }
+
+        @Override
+        protected Node visitOrderBy(OrderBy node, Void context)
+        {
+            return new OrderBy(
+                    node.getSortItems().stream()
+                            .map(sortItem -> (SortItem) process(sortItem, context))
+                            .collect(toImmutableList()));
+        }
+
+        @Override
+        protected Node visitSortItem(SortItem node, Void context)
+        {
+            return new SortItem((Expression) process(node.getSortKey(), context), node.getOrdering(), node.getNullOrdering());
+        }
+
+        @Override
+        protected Node visitNode(Node node, Void context)
+        {
+            return node;
+        }
     }
 }

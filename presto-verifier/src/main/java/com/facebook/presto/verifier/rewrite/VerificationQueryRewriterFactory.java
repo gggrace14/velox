@@ -50,6 +50,8 @@ public class VerificationQueryRewriterFactory
     private final List<Property> controlTableProperties;
     private final List<Property> testTableProperties;
 
+    private final boolean rewriteNonDeterministicColumns;
+
     @Inject
     public VerificationQueryRewriterFactory(
             SqlParser sqlParser,
@@ -63,6 +65,7 @@ public class VerificationQueryRewriterFactory
         this.testTablePrefix = requireNonNull(testConfig.getTablePrefix(), "testTablePrefix is null");
         this.controlTableProperties = constructProperties(controlConfig.getTableProperties());
         this.testTableProperties = constructProperties(testConfig.getTableProperties());
+        this.rewriteNonDeterministicColumns = testConfig.isRewriteNonDeterministicColumns() || controlConfig.isRewriteNonDeterministicColumns();
     }
 
     @Override
@@ -73,7 +76,8 @@ public class VerificationQueryRewriterFactory
                 typeManager,
                 prestoAction,
                 ImmutableMap.of(CONTROL, controlTablePrefix, TEST, testTablePrefix),
-                ImmutableMap.of(CONTROL, controlTableProperties, TEST, testTableProperties));
+                ImmutableMap.of(CONTROL, controlTableProperties, TEST, testTableProperties),
+                rewriteNonDeterministicColumns);
     }
 
     private static List<Property> constructProperties(Map<String, Object> propertiesMap)
