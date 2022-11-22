@@ -34,15 +34,19 @@ std::string makeUuid() {
 std::shared_ptr<const WriterParameters>
 HiveNoCommitWriteProtocol::getWriterParameters(
     const std::shared_ptr<const ConnectorInsertTableHandle>& tableWriteHandle,
-    const ConnectorQueryCtx* FOLLY_NONNULL connectorQueryCtx) const {
+    const ConnectorQueryCtx* FOLLY_NONNULL connectorQueryCtx,
+    const std::shared_ptr<const ConnectorWriteInfo>& writeInfo) const {
   auto hiveTableWriteHandle =
       std::dynamic_pointer_cast<const HiveInsertTableHandle>(tableWriteHandle);
   VELOX_CHECK_NOT_NULL(
       hiveTableWriteHandle,
       "This write protocol cannot be used for non-Hive connector");
-  VELOX_USER_CHECK(
-      !hiveTableWriteHandle->isPartitioned(),
-      "Getting write parameters for partitioned Hive tables is not implemented yet.");
+  auto hiveWriteInfo =
+      std::dynamic_pointer_cast<const HiveConnectorWriteInfo>(writeInfo);
+  VELOX_CHECK_NOT_NULL(
+      hiveWriteInfo,
+      "This write protocol cannot be used for non-Hive connector");
+
   VELOX_USER_CHECK(
       hiveTableWriteHandle->isCreateTable() ||
           !HiveConfig::isImmutablePartitions(connectorQueryCtx->config()),
@@ -53,29 +57,48 @@ HiveNoCommitWriteProtocol::getWriterParameters(
       connectorQueryCtx->taskId(),
       connectorQueryCtx->driverId(),
       makeUuid());
+  auto targetDirectory = hiveWriteInfo->partitionDirectory().has_value()
+      ? fmt::format(
+            "{}/{}",
+            hiveTableWriteHandle->locationHandle()->targetPath(),
+            hiveWriteInfo->partitionDirectory().value())
+      : hiveTableWriteHandle->locationHandle()->targetPath();
+  auto writeDirectory = hiveWriteInfo->partitionDirectory().has_value()
+      ? fmt::format(
+            "{}/{}",
+            hiveTableWriteHandle->locationHandle()->writePath(),
+            hiveWriteInfo->partitionDirectory().value())
+      : hiveTableWriteHandle->locationHandle()->writePath();
+  //  auto targetDirectory =
+  //  hiveTableWriteHandle->locationHandle()->targetPath(); auto writeDirectory
+  //  = hiveTableWriteHandle->locationHandle()->writePath();
 
   return std::make_shared<HiveWriterParameters>(
       hiveTableWriteHandle->isCreateTable()
           ? HiveWriterParameters::UpdateMode::kNew
           : HiveWriterParameters::UpdateMode::kAppend,
       targetFileName,
-      hiveTableWriteHandle->locationHandle()->targetPath(),
+      targetDirectory,
       targetFileName,
-      hiveTableWriteHandle->locationHandle()->writePath());
+      writeDirectory);
 }
 
 std::shared_ptr<const WriterParameters>
 HiveTaskCommitWriteProtocol::getWriterParameters(
     const std::shared_ptr<const ConnectorInsertTableHandle>& tableWriteHandle,
-    const ConnectorQueryCtx* FOLLY_NONNULL connectorQueryCtx) const {
+    const ConnectorQueryCtx* FOLLY_NONNULL connectorQueryCtx,
+    const std::shared_ptr<const ConnectorWriteInfo>& writeInfo) const {
   auto hiveTableWriteHandle =
       std::dynamic_pointer_cast<const HiveInsertTableHandle>(tableWriteHandle);
   VELOX_CHECK_NOT_NULL(
       hiveTableWriteHandle,
       "This write protocol cannot be used for non-Hive connector");
-  VELOX_USER_CHECK(
-      !hiveTableWriteHandle->isPartitioned(),
-      "Getting write parameters for partitioned Hive tables is not implemented yet.");
+  auto hiveWriteInfo =
+      std::dynamic_pointer_cast<const HiveConnectorWriteInfo>(writeInfo);
+  VELOX_CHECK_NOT_NULL(
+      hiveWriteInfo,
+      "This write protocol cannot be used for non-Hive connector");
+
   VELOX_USER_CHECK(
       hiveTableWriteHandle->isCreateTable() ||
           !HiveConfig::isImmutablePartitions(connectorQueryCtx->config()),
@@ -88,15 +111,27 @@ HiveTaskCommitWriteProtocol::getWriterParameters(
       0);
   auto writeFileName =
       fmt::format(".tmp.velox.{}_{}", targetFileName, makeUuid());
+  auto targetDirectory = hiveWriteInfo->partitionDirectory().has_value()
+      ? fmt::format(
+            "{}/{}",
+            hiveTableWriteHandle->locationHandle()->targetPath(),
+            hiveWriteInfo->partitionDirectory().value())
+      : hiveTableWriteHandle->locationHandle()->targetPath();
+  auto writeDirectory = hiveWriteInfo->partitionDirectory().has_value()
+      ? fmt::format(
+            "{}/{}",
+            hiveTableWriteHandle->locationHandle()->writePath(),
+            hiveWriteInfo->partitionDirectory().value())
+      : hiveTableWriteHandle->locationHandle()->writePath();
 
   return std::make_shared<HiveWriterParameters>(
       hiveTableWriteHandle->isCreateTable()
           ? HiveWriterParameters::UpdateMode::kNew
           : HiveWriterParameters::UpdateMode::kAppend,
       targetFileName,
-      hiveTableWriteHandle->locationHandle()->targetPath(),
+      targetDirectory,
       writeFileName,
-      hiveTableWriteHandle->locationHandle()->writePath());
+      writeDirectory);
 }
 
 } // namespace facebook::velox::connector::hive

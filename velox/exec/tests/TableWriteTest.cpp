@@ -49,6 +49,17 @@ class TableWriteTest : public HiveConnectorTestBase {
     return splits;
   }
 
+  std::vector<RowVectorPtr> makeBatches(
+      vector_size_t numBatches,
+      std::function<RowVectorPtr(int32_t)> makeVector) {
+    std::vector<RowVectorPtr> batches;
+    batches.reserve(numBatches);
+    for (int32_t i = 0; i < numBatches; ++i) {
+      batches.push_back(makeVector(i));
+    }
+    return batches;
+  }
+
   RowTypePtr rowType_{
       ROW({"c0", "c1", "c2", "c3", "c4", "c5"},
           {BIGINT(), INTEGER(), SMALLINT(), REAL(), DOUBLE(), VARCHAR()})};
@@ -272,6 +283,43 @@ TEST_F(TableWriteTest, TestASecondCommitStrategy) {
       PlanBuilder().tableScan(rowType_).planNode(),
       makeHiveConnectorSplits(outputDirectory),
       "SELECT * FROM tmp");
+}
+
+TEST_F(TableWriteTest, PartitionedTable) {
+  auto inputFilePaths = makeFilePaths(3);
+  std::vector<RowVectorPtr> vectors = makeBatches(3, [&](int32_t batch) {
+    return makeRowVector(
+        {"p0", "p1"},
+        {makeFlatVector<int32_t>(
+             10, [&](auto row) { return (batch % 2) * 100 + row; }),
+         makeFlatVector<StringView>(10, [&](auto row) {
+           return StringView(fmt::format("{}_string", (batch % 2) * 100 + row));
+         })});
+  });
+  for (int i = 0; i < vectors.size(); i++) {
+    writeToFile(inputFilePaths[i]->path, vectors[i]);
+  }
+
+  createDuckDbTable(vectors);
+
+  auto outputDirectory = TempDirectoryPath::create();
+  auto plan = PlanBuilder()
+                  .tableScan(ROW({"p0", "p1"}, {INTEGER(), VARCHAR()}))
+                  .tableWrite(
+                      {"p0", "p1"},
+                      std::make_shared<core::InsertTableHandle>(
+                          kHiveConnectorId,
+                          makeHiveInsertTableHandle(
+                              {"p0", "p1"},
+                              {INTEGER(), VARCHAR()},
+                              {"p0", "p1"},
+                              makeLocationHandle(outputDirectory->path))),
+                      WriteProtocol::CommitStrategy::kNoCommit,
+                      "rows")
+                  .project({"rows"})
+                  .planNode();
+
+  assertQuery(plan, inputFilePaths, "SELECT count(*) FROM tmp");
 }
 
 // Test TableWriter does not create a file if input is empty.

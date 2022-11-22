@@ -94,14 +94,31 @@ class HiveWriterParameters : public WriterParameters {
   const std::string writeDirectory_;
 };
 
+class HiveConnectorWriteInfo : public ConnectorWriteInfo {
+ public:
+  explicit HiveConnectorWriteInfo(std::optional<std::string> partitionDirectory)
+      : partitionDirectory_(std::move(partitionDirectory)) {}
+
+  ~HiveConnectorWriteInfo() override = default;
+
+  const std::optional<std::string>& partitionDirectory() const {
+    return partitionDirectory_;
+  }
+
+ private:
+  const std::optional<std::string> partitionDirectory_;
+};
+
 /// Commit info of Hive connector.
 class HiveConnectorCommitInfo : public ConnectorCommitInfo {
  public:
   /// @param writerParameters Parameters provided for writers. Hive connector
   /// will pass this info to commit.
   explicit HiveConnectorCommitInfo(
-      std::vector<std::shared_ptr<const HiveWriterParameters>> writerParameters)
-      : writeParameters_(std::move(writerParameters)) {}
+      std::vector<std::shared_ptr<const HiveWriterParameters>> writerParameters,
+      std::vector<std::string> partitionNames)
+      : writeParameters_(std::move(writerParameters)),
+        partitionNames_(std::move(partitionNames)) {}
 
   ~HiveConnectorCommitInfo() override = default;
 
@@ -110,9 +127,14 @@ class HiveConnectorCommitInfo : public ConnectorCommitInfo {
     return writeParameters_;
   }
 
+  const std::vector<std::string>& partitionNames() const {
+    return partitionNames_;
+  }
+
  private:
   const std::vector<std::shared_ptr<const HiveWriterParameters>>
       writeParameters_;
+  const std::vector<std::string> partitionNames_;
 };
 
 /// WriteProtocol base implementation for Hive writes. WriterParameters have the
@@ -127,10 +149,10 @@ class HiveNoCommitWriteProtocol : public DefaultWriteProtocol {
   }
 
   std::shared_ptr<const WriterParameters> getWriterParameters(
-      const std::shared_ptr<const velox::connector::ConnectorInsertTableHandle>&
-          tableHandle,
-      const velox::connector::ConnectorQueryCtx* FOLLY_NONNULL
-          connectorQueryCtx) const override;
+      const std::shared_ptr<const ConnectorInsertTableHandle>& tableHandle,
+      const ConnectorQueryCtx* FOLLY_NONNULL connectorQueryCtx,
+      const std::shared_ptr<const ConnectorWriteInfo>& writeInfo)
+      const override;
 
   static bool registerProtocol() {
     return registerWriteProtocol(
@@ -154,7 +176,9 @@ class HiveTaskCommitWriteProtocol : public DefaultWriteProtocol {
       const std::shared_ptr<const velox::connector::ConnectorInsertTableHandle>&
           tableHandle,
       const velox::connector::ConnectorQueryCtx* FOLLY_NONNULL
-          connectorQueryCtx) const override;
+          connectorQueryCtx,
+      const std::shared_ptr<const ConnectorWriteInfo>& writeInfo)
+      const override;
 
   static bool registerProtocol() {
     return registerWriteProtocol(

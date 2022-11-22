@@ -16,6 +16,9 @@
 #pragma once
 
 #include "velox/connectors/Connector.h"
+#include "velox/exec/VectorHasher.h"
+
+#include <algorithm>
 
 namespace facebook::velox::dwrf {
 class Writer;
@@ -114,6 +117,47 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
   const std::shared_ptr<const LocationHandle> locationHandle_;
 };
 
+
+class PartitionIdGenerator {
+ public:
+  static constexpr const int32_t kHasherReservePct = 20;
+
+  explicit PartitionIdGenerator(
+      RowTypePtr partitionType,
+      std::vector<column_index_t> partitionChannels,
+      const Config* FOLLY_NONNULL connectorConfig)
+      : partitionType_(std::move(partitionType)),
+        connectorConfig_(std::move(connectorConfig)) {
+    hashers_.reserve(partitionType_->size());
+    for (auto i = 0; i < partitionType_->size(); i++) {
+      hashers_.push_back(exec::VectorHasher::create(
+          partitionType_->childAt(i), partitionChannels[i]));
+    }
+  }
+
+  bool run(
+      RowVectorPtr input,
+      const SelectivityVector& activeRows,
+      raw_vector<uint64_t>& result);
+
+  void rerun(
+      RowVectorPtr input,
+      const SelectivityVector& activeRows,
+      raw_vector<uint64_t>& result);
+
+ private:
+  bool runInternal(
+      RowVectorPtr input,
+      const SelectivityVector& activeRows,
+      bool allowRehash,
+      raw_vector<uint64_t>& result);
+
+  const RowTypePtr partitionType_;
+  const Config* FOLLY_NONNULL connectorConfig_;
+
+  std::vector<std::unique_ptr<exec::VectorHasher>> hashers_;
+};
+
 class HiveDataSink : public DataSink {
  public:
   explicit HiveDataSink(
@@ -129,16 +173,74 @@ class HiveDataSink : public DataSink {
   void close() override;
 
  private:
-  std::unique_ptr<dwrf::Writer> createWriter();
+  std::unique_ptr<dwrf::Writer> createWriter(
+      const std::shared_ptr<const HiveWriterParameters>& writerParameters);
+
+  void moveWriters();
+
+  static RowVectorPtr makeWriterInput(
+      const RowVectorPtr& rawInput,
+      vector_size_t size,
+      const BufferPtr& index);
+
+  static void computePartitionRowCountsAndIndices(
+      const raw_vector<uint64_t>& rowPartitionIds,
+      const SelectivityVector& activeRows,
+      uint64_t maxPartitionId,
+      memory::MemoryPool* FOLLY_NONNULL pool,
+      std::vector<vector_size_t>& rowCounts,
+      std::vector<BufferPtr>& rowIndices);
+
+  static std::string getPartitionString(
+      const RowVectorPtr& partitionsString,
+      vector_size_t row);
 
   const RowTypePtr inputType_;
   const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle_;
   const ConnectorQueryCtx* FOLLY_NONNULL connectorQueryCtx_;
   const std::shared_ptr<WriteProtocol> writeProtocol_;
-  // Parameters used by writers, and thus are tracked in the same order
-  // as the writers_ vector
-  std::vector<std::shared_ptr<const HiveWriterParameters>> writerParameters_;
+  const std::vector<column_index_t> partitionChannels_;
+  const RowTypePtr partitionsType_;
+  PartitionIdGenerator partitionIdGenerator_;
+
   std::vector<std::unique_ptr<dwrf::Writer>> writers_;
+  RowVectorPtr partitionsVector_;
+  std::vector<vector_size_t> partitionRowCounts_;
+
+  RowVectorPtr input_;
+  SelectivityVector activeRows_;
+  raw_vector<uint64_t> partitionIds_;
 };
+
+#define PARTITION_TYPE_DISPATCH(TEMPLATE_FUNC, typeKind, ...)             \
+  [&]() {                                                                 \
+    switch (typeKind) {                                                   \
+      case TypeKind::BOOLEAN: {                                           \
+        return TEMPLATE_FUNC<TypeKind::BOOLEAN>(__VA_ARGS__);             \
+      }                                                                   \
+      case TypeKind::TINYINT: {                                           \
+        return TEMPLATE_FUNC<TypeKind::TINYINT>(__VA_ARGS__);             \
+      }                                                                   \
+      case TypeKind::SMALLINT: {                                          \
+        return TEMPLATE_FUNC<TypeKind::SMALLINT>(__VA_ARGS__);            \
+      }                                                                   \
+      case TypeKind::INTEGER: {                                           \
+        return TEMPLATE_FUNC<TypeKind::INTEGER>(__VA_ARGS__);             \
+      }                                                                   \
+      case TypeKind::BIGINT: {                                            \
+        return TEMPLATE_FUNC<TypeKind::BIGINT>(__VA_ARGS__);              \
+      }                                                                   \
+      case TypeKind::VARCHAR:                                             \
+      case TypeKind::VARBINARY: {                                         \
+        return TEMPLATE_FUNC<TypeKind::VARCHAR>(__VA_ARGS__);             \
+      }                                                                   \
+      case TypeKind::DATE: {                                              \
+        return TEMPLATE_FUNC<TypeKind::DATE>(__VA_ARGS__);                \
+      }                                                                   \
+      default:                                                            \
+        VELOX_UNREACHABLE(                                                \
+            "Unsupported partition type: ", mapTypeKindToName(typeKind)); \
+    }                                                                     \
+  }()
 
 } // namespace facebook::velox::connector::hive

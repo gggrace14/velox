@@ -202,12 +202,21 @@ class HiveDataSource : public DataSource {
 class HiveConfig {
  public:
   /// Can new data be inserted into existing partitions or existing
-  /// unpartitioned tables
+  /// unpartitioned tables.
   static constexpr const char* FOLLY_NONNULL kImmutablePartitions =
       "hive.immutable-partitions";
 
+  /// Maximum number of partitions per writer.
+  static constexpr const char* FOLLY_NONNULL kMaxPartitionsPerWriters =
+      "hive.max-partitions-per-writers";
+
   static bool isImmutablePartitions(const Config* FOLLY_NONNULL baseConfig) {
     return baseConfig->get<bool>(kImmutablePartitions, true);
+  }
+
+  static uint64_t maxPartitionsPerWriters(
+      const Config* FOLLY_NONNULL baseConfig) {
+    return baseConfig->get<uint64_t>(kMaxPartitionsPerWriters, 100);
   }
 };
 

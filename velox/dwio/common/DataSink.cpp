@@ -15,6 +15,8 @@
  */
 
 #include "velox/dwio/common/DataSink.h"
+
+#include "velox/common/base/Fs.h"
 #include "velox/dwio/common/exception/Exception.h"
 
 #include <fcntl.h>
@@ -28,6 +30,10 @@ FileSink::FileSink(
     const MetricsLogPtr& metricLogger,
     IoStatistics* stats)
     : DataSink{name, metricLogger, stats} {
+  auto dir = fs::path(name).parent_path();
+  if (!fs::exists(dir)) {
+    DWIO_ENSURE(facebook::velox::common::generateFileDirectory(dir.c_str()));
+  }
   file_ = open(name_.c_str(), O_CREAT | O_WRONLY | O_TRUNC, S_IRUSR | S_IWUSR);
   if (file_ == -1) {
     markClosed();
