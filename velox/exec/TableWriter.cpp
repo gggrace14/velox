@@ -99,6 +99,9 @@ RowVectorPtr TableWriter::getOutput() {
   }
   finished_ = true;
 
+  auto lockedStats = stats_.wlock();
+  lockedStats->addRuntimeStat("writtenRows", RuntimeCounter(numWrittenRows_));
+
   connector::CommitInfo commitInfo(
       dataSink_->getConnectorCommitInfo(),
       numWrittenRows_,
