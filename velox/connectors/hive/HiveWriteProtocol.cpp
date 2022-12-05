@@ -15,6 +15,9 @@
  */
 
 #include "velox/connectors/hive/HiveWriteProtocol.h"
+
+#include "velox/common/base/Fs.h"
+#include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnector.h"
 
 #include <boost/lexical_cast.hpp>
@@ -29,58 +32,114 @@ std::string makeUuid() {
   return boost::lexical_cast<std::string>(boost::uuids::random_generator()());
 }
 
+std::string makePartitionDirectory(
+    const std::string& tableDirectory,
+    const std::optional<std::string>& partitionSubdirectory) {
+  if (partitionSubdirectory.has_value()) {
+    return (fs::path(tableDirectory) / partitionSubdirectory.value()).string();
+  }
+  return tableDirectory;
+}
+
+HiveWriterParameters::UpdateMode validateAndGetUpdateMode(
+    const std::shared_ptr<const HiveInsertTableHandle>& hiveTableWriteHandle,
+    const ConnectorQueryCtx* connectorQueryCtx) {
+  if (hiveTableWriteHandle->isInsertTable()) {
+    if (hiveTableWriteHandle->isPartitioned()) {
+      HiveConfig::InsertExistingPartitionsBehavior insertBehavior =
+          HiveConfig::insertExistingPartitionsBehavior(
+              connectorQueryCtx->config());
+
+      switch (insertBehavior) {
+        case HiveConfig::InsertExistingPartitionsBehavior::kOverwrite:
+          return HiveWriterParameters::UpdateMode::kOverwrite;
+
+        case HiveConfig::InsertExistingPartitionsBehavior::kError:
+          return HiveWriterParameters::UpdateMode::kNew;
+
+          // TODO(gaoge): Include pageSinkMetadata and modifiedPartitions
+          // fields in HiveInsertTableHandle to support
+          // hive.fail-fast-on-insert-into-immutable-partitions-enabled.
+        case HiveConfig::InsertExistingPartitionsBehavior::kAppend:
+          VELOX_UNSUPPORTED("Insert into existing partition is not supported.");
+
+          // TODO(gaoge): Include pageSinkMetadata and modifiedPartitions
+          // fields in HiveInsertTableHandle to support insert into existing
+          // partition with APPEND behavior.
+        default:
+          VELOX_UNSUPPORTED("Unsupported insert existing partitions behavior.");
+      }
+    } else {
+      VELOX_USER_CHECK(
+          !HiveConfig::isImmutablePartitions(connectorQueryCtx->config()),
+          "Unpartitioned Hive tables are immutable.");
+
+      return HiveWriterParameters::UpdateMode::kAppend;
+    }
+  } else {
+    return HiveWriterParameters::UpdateMode::kNew;
+  }
+}
+
 } // namespace
 
 std::shared_ptr<const WriterParameters>
 HiveNoCommitWriteProtocol::getWriterParameters(
     const std::shared_ptr<const ConnectorInsertTableHandle>& tableWriteHandle,
-    const ConnectorQueryCtx* FOLLY_NONNULL connectorQueryCtx) const {
+    const ConnectorQueryCtx* connectorQueryCtx,
+    const std::shared_ptr<const ConnectorWriteInfo>& writeInfo) const {
   auto hiveTableWriteHandle =
       std::dynamic_pointer_cast<const HiveInsertTableHandle>(tableWriteHandle);
   VELOX_CHECK_NOT_NULL(
       hiveTableWriteHandle,
       "This write protocol cannot be used for non-Hive connector");
-  VELOX_USER_CHECK(
-      !hiveTableWriteHandle->isPartitioned(),
-      "Getting write parameters for partitioned Hive tables is not implemented yet.");
-  VELOX_USER_CHECK(
-      hiveTableWriteHandle->isCreateTable() ||
-          !HiveConfig::isImmutablePartitions(connectorQueryCtx->config()),
-      "Unpartitioned Hive tables are immutable");
+  auto hiveWriteInfo =
+      std::dynamic_pointer_cast<const HiveConnectorWriteInfo>(writeInfo);
+  VELOX_CHECK_NOT_NULL(
+      hiveWriteInfo,
+      "This write protocol cannot be used for non-Hive connector");
 
+  auto updateMode =
+      validateAndGetUpdateMode(hiveTableWriteHandle, connectorQueryCtx);
   auto targetFileName = fmt::format(
       "{}_{}_{}",
       connectorQueryCtx->taskId(),
       connectorQueryCtx->driverId(),
       makeUuid());
+  auto targetDirectory = makePartitionDirectory(
+      hiveTableWriteHandle->locationHandle()->targetPath(),
+      hiveWriteInfo->partitionDirectory());
+  auto writeDirectory = makePartitionDirectory(
+      hiveTableWriteHandle->locationHandle()->writePath(),
+      hiveWriteInfo->partitionDirectory());
 
   return std::make_shared<HiveWriterParameters>(
-      hiveTableWriteHandle->isCreateTable()
-          ? HiveWriterParameters::UpdateMode::kNew
-          : HiveWriterParameters::UpdateMode::kAppend,
+      updateMode,
+      hiveWriteInfo->partitionDirectory(),
       targetFileName,
-      hiveTableWriteHandle->locationHandle()->targetPath(),
+      targetDirectory,
       targetFileName,
-      hiveTableWriteHandle->locationHandle()->writePath());
+      writeDirectory);
 }
 
 std::shared_ptr<const WriterParameters>
 HiveTaskCommitWriteProtocol::getWriterParameters(
     const std::shared_ptr<const ConnectorInsertTableHandle>& tableWriteHandle,
-    const ConnectorQueryCtx* FOLLY_NONNULL connectorQueryCtx) const {
+    const ConnectorQueryCtx* connectorQueryCtx,
+    const std::shared_ptr<const ConnectorWriteInfo>& writeInfo) const {
   auto hiveTableWriteHandle =
       std::dynamic_pointer_cast<const HiveInsertTableHandle>(tableWriteHandle);
   VELOX_CHECK_NOT_NULL(
       hiveTableWriteHandle,
       "This write protocol cannot be used for non-Hive connector");
-  VELOX_USER_CHECK(
-      !hiveTableWriteHandle->isPartitioned(),
-      "Getting write parameters for partitioned Hive tables is not implemented yet.");
-  VELOX_USER_CHECK(
-      hiveTableWriteHandle->isCreateTable() ||
-          !HiveConfig::isImmutablePartitions(connectorQueryCtx->config()),
-      "Unpartitioned Hive tables are immutable");
+  auto hiveWriteInfo =
+      std::dynamic_pointer_cast<const HiveConnectorWriteInfo>(writeInfo);
+  VELOX_CHECK_NOT_NULL(
+      hiveWriteInfo,
+      "This write protocol cannot be used for non-Hive connector");
 
+  auto updateMode =
+      validateAndGetUpdateMode(hiveTableWriteHandle, connectorQueryCtx);
   auto targetFileName = fmt::format(
       "{}_{}_{}",
       connectorQueryCtx->taskId(),
@@ -88,15 +147,20 @@ HiveTaskCommitWriteProtocol::getWriterParameters(
       0);
   auto writeFileName =
       fmt::format(".tmp.velox.{}_{}", targetFileName, makeUuid());
+  auto targetDirectory = makePartitionDirectory(
+      hiveTableWriteHandle->locationHandle()->targetPath(),
+      hiveWriteInfo->partitionDirectory());
+  auto writeDirectory = makePartitionDirectory(
+      hiveTableWriteHandle->locationHandle()->writePath(),
+      hiveWriteInfo->partitionDirectory());
 
   return std::make_shared<HiveWriterParameters>(
-      hiveTableWriteHandle->isCreateTable()
-          ? HiveWriterParameters::UpdateMode::kNew
-          : HiveWriterParameters::UpdateMode::kAppend,
+      updateMode,
+      hiveWriteInfo->partitionDirectory(),
       targetFileName,
-      hiveTableWriteHandle->locationHandle()->targetPath(),
+      targetDirectory,
       writeFileName,
-      hiveTableWriteHandle->locationHandle()->writePath());
+      writeDirectory);
 }
 
 } // namespace facebook::velox::connector::hive

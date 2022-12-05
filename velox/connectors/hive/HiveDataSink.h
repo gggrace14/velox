@@ -129,7 +129,9 @@ class HiveDataSink : public DataSink {
   void close() override;
 
  private:
-  std::unique_ptr<dwrf::Writer> createWriter();
+  std::unique_ptr<dwrf::Writer> createWriter(
+      const std::shared_ptr<const HiveWriterParameters>& writerParameters)
+      const;
 
   const RowTypePtr inputType_;
   const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle_;

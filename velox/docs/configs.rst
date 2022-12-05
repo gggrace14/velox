@@ -2,8 +2,11 @@
 Configuration properties
 ========================
 
+Query Configuration Properties
+------------------------------
+
 Memory Management
------------------
+~~~~~~~~~~~~~~~~~~
 
 ``max_partial_aggregation_memory``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -165,3 +168,34 @@ If the limit is zero, then the spiller always spills a previously spilled
 partition if it has any data. This is to avoid spill from a partition with a
 small amount of data which might result in generating too many small spilled
 files.
+
+
+Hive Configuration Properties
+-----------------------------
+
+Table Writer
+~~~~~~~~~~~~
+
+``max_partitions_per_writers``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    * **Type:** ``integer``
+    * **Default value:** ``100``
+
+Maximum number of partitions per writer.
+
+``immutable_partitions``
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+    * **Type:** ``boolean``
+    * **Default value:** ``true``
+
+Can new data be inserted into existing partitions or existing unpartitioned tables.
+
+``insert_existing_partitions_behavior``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    * **Type:** ``string``
+    * **Default value:** ``ERROR``
+
+Behavior on insert existing partitions.
