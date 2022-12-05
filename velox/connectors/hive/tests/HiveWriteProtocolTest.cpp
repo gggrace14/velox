@@ -15,6 +15,7 @@
  */
 
 #include "velox/connectors/hive/HiveWriteProtocol.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/core/QueryCtx.h"
 
@@ -29,43 +30,115 @@ TEST(HiveWriteProtocolTest, writerParameters) {
   HiveNoCommitWriteProtocol::registerProtocol();
   HiveTaskCommitWriteProtocol::registerProtocol();
 
-  auto queryCtx = std::make_shared<QueryCtx>();
+  MemConfig hiveConfig;
   ConnectorQueryCtx connectorQueryCtx(
-      queryCtx->pool(),
-      queryCtx->getConnectorConfig(HiveConnectorFactory::kHiveConnectorName),
+      memory::getDefaultMemoryPool().get(),
+      &hiveConfig,
       nullptr,
-      queryCtx->mappedMemory(),
+      memory::MappedMemory::getInstance(),
       "test_task_id",
       "test_plan_node_id",
       0);
   std::vector<std::shared_ptr<const HiveColumnHandle>> inputColumns{
       std::make_shared<const HiveColumnHandle>(
           "col", HiveColumnHandle::ColumnType::kRegular, BIGINT())};
-  auto insertTableHandle = std::make_shared<HiveInsertTableHandle>(
+  auto writeTableHandle = std::make_shared<HiveInsertTableHandle>(
       inputColumns,
       std::make_shared<LocationHandle>(
           "test_table_directory",
           "test_table_directory",
           LocationHandle::TableType::kNew,
           LocationHandle::WriteMode::kDirectToTargetNewDirectory));
+  auto writeInfo = std::make_shared<HiveConnectorWriteInfo>();
 
-  auto noCommitWriteProtocol =
-      WriteProtocol::getWriteProtocol(WriteProtocol::CommitStrategy::kNoCommit);
-  auto noCommitWriterParameters =
-      std::dynamic_pointer_cast<const HiveWriterParameters>(
-          noCommitWriteProtocol->getWriterParameters(
-              insertTableHandle, &connectorQueryCtx));
-  ASSERT_EQ(
-      noCommitWriterParameters->writeFileName(),
-      noCommitWriterParameters->targetFileName());
+  {
+    auto noCommitWriteProtocol = WriteProtocol::getWriteProtocol(
+        WriteProtocol::CommitStrategy::kNoCommit);
+    auto noCommitWriterParameters =
+        std::dynamic_pointer_cast<const HiveWriterParameters>(
+            noCommitWriteProtocol->getWriterParameters(
+                writeTableHandle, &connectorQueryCtx, writeInfo));
+    ASSERT_EQ(
+        noCommitWriterParameters->writeFileName(),
+        noCommitWriterParameters->targetFileName());
+  }
 
-  auto taskCommitWriteProtocol = WriteProtocol::getWriteProtocol(
-      WriteProtocol::CommitStrategy::kTaskCommit);
-  auto taskCommitWriterParameters =
-      std::dynamic_pointer_cast<const HiveWriterParameters>(
-          taskCommitWriteProtocol->getWriterParameters(
-              insertTableHandle, &connectorQueryCtx));
-  ASSERT_NE(
-      taskCommitWriterParameters->writeFileName(),
-      taskCommitWriterParameters->targetFileName());
+  {
+    auto taskCommitWriteProtocol = WriteProtocol::getWriteProtocol(
+        WriteProtocol::CommitStrategy::kTaskCommit);
+    auto taskCommitWriterParameters =
+        std::dynamic_pointer_cast<const HiveWriterParameters>(
+            taskCommitWriteProtocol->getWriterParameters(
+                writeTableHandle, &connectorQueryCtx, writeInfo));
+    ASSERT_NE(
+        taskCommitWriterParameters->writeFileName(),
+        taskCommitWriterParameters->targetFileName());
+  }
+}
+
+TEST(HiveWriteProtocolTest, validation) {
+  HiveNoCommitWriteProtocol::registerProtocol();
+
+  // Insert into existing unpartitioned table.
+  {
+    std::vector<std::shared_ptr<const HiveColumnHandle>> inputColumns{
+        std::make_shared<const HiveColumnHandle>(
+            "col", HiveColumnHandle::ColumnType::kRegular, BIGINT())};
+    auto insertTableHandle = std::make_shared<HiveInsertTableHandle>(
+        inputColumns,
+        std::make_shared<LocationHandle>(
+            "test_table_directory",
+            "test_table_directory",
+            LocationHandle::TableType::kExisting,
+            LocationHandle::WriteMode::kDirectToTargetNewDirectory));
+    auto writeInfo = std::make_shared<HiveConnectorWriteInfo>();
+    MemConfig hiveConfig(std::unordered_map<std::string, std::string>{
+        {"immutable_partitions", "true"}});
+    ConnectorQueryCtx connectorQueryCtx(
+        memory::getDefaultMemoryPool().get(),
+        &hiveConfig,
+        nullptr,
+        memory::MappedMemory::getInstance(),
+        "test_task_id",
+        "test_plan_node_id",
+        0);
+    VELOX_ASSERT_THROW(
+        WriteProtocol::getWriteProtocol(
+            WriteProtocol::CommitStrategy::kNoCommit)
+            ->getWriterParameters(
+                insertTableHandle, &connectorQueryCtx, writeInfo),
+        "Unpartitioned Hive tables are immutable.");
+  }
+
+  // Insert into existing partitioned table, with
+  // insert_existing_partitions_behavior set to APPEND
+  {
+    std::vector<std::shared_ptr<const HiveColumnHandle>> inputColumns{
+        std::make_shared<const HiveColumnHandle>(
+            "part", HiveColumnHandle::ColumnType::kPartitionKey, BIGINT())};
+    auto insertTableHandle = std::make_shared<HiveInsertTableHandle>(
+        inputColumns,
+        std::make_shared<LocationHandle>(
+            "test_table_directory",
+            "test_table_directory",
+            LocationHandle::TableType::kExisting,
+            LocationHandle::WriteMode::kDirectToTargetNewDirectory));
+    auto writeInfo = std::make_shared<HiveConnectorWriteInfo>("part=p0");
+    MemConfig hiveConfig(std::unordered_map<std::string, std::string>{
+        {"insert_existing_partitions_behavior", "APPEND"}});
+    ConnectorQueryCtx connectorQueryCtx(
+        memory::getDefaultMemoryPool().get(),
+        &hiveConfig,
+        nullptr,
+        memory::MappedMemory::getInstance(),
+        "test_task_id",
+        "test_plan_node_id",
+        0);
+    VELOX_ASSERT_THROW(
+        WriteProtocol::getWriteProtocol(
+            WriteProtocol::CommitStrategy::kNoCommit)
+            ->getWriterParameters(
+                insertTableHandle, &connectorQueryCtx, writeInfo),
+        "Hive partitions are immutable. insert_existing_partitions_behavior is not allowed to be set to APPEND.");
+  }
 }

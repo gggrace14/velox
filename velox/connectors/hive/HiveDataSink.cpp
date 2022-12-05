@@ -49,7 +49,17 @@ void HiveDataSink::appendData(VectorPtr input) {
   // To extend it we can create a new writer for every
   // partition
   if (writers_.empty()) {
-    writers_.emplace_back(createWriter());
+    auto hiveWriterParameters =
+        std::dynamic_pointer_cast<const HiveWriterParameters>(
+            writeProtocol_->getWriterParameters(
+                insertTableHandle_,
+                connectorQueryCtx_,
+                std::make_shared<HiveConnectorWriteInfo>()));
+    VELOX_CHECK_NOT_NULL(
+        hiveWriterParameters,
+        "Hive data sink expects write parameters for Hive.");
+    writerParameters_.emplace_back(hiveWriterParameters);
+    writers_.emplace_back(createWriter(writerParameters_[0]));
   }
   writers_[0]->write(input);
 }
@@ -60,7 +70,8 @@ void HiveDataSink::close() {
   }
 }
 
-std::unique_ptr<velox::dwrf::Writer> HiveDataSink::createWriter() {
+std::unique_ptr<velox::dwrf::Writer> HiveDataSink::createWriter(
+    const std::shared_ptr<const HiveWriterParameters>& writerParameters) const {
   auto config = std::make_shared<WriterConfig>();
   // TODO: Wire up serde properties to writer configs.
 
@@ -70,17 +81,8 @@ std::unique_ptr<velox::dwrf::Writer> HiveDataSink::createWriter() {
   // Without explicitly setting flush policy, the default memory based flush
   // policy is used.
 
-  auto hiveWriterParameters =
-      std::dynamic_pointer_cast<const HiveWriterParameters>(
-          writeProtocol_->getWriterParameters(
-              insertTableHandle_, connectorQueryCtx_));
-  VELOX_CHECK_NOT_NULL(
-      hiveWriterParameters,
-      "Hive data sink expects write parameters for Hive.");
-  writerParameters_.emplace_back(hiveWriterParameters);
-
-  auto writePath = fs::path(hiveWriterParameters->writeDirectory()) /
-      hiveWriterParameters->writeFileName();
+  auto writePath = fs::path(writerParameters->writeDirectory()) /
+      writerParameters->writeFileName();
   auto sink = dwio::common::DataSink::create(writePath);
   return std::make_unique<Writer>(
       options, std::move(sink), *connectorQueryCtx_->memoryPool());

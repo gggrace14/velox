@@ -30,6 +30,11 @@ class WriterParameters {
   virtual ~WriterParameters() = default;
 };
 
+class ConnectorWriteInfo {
+ public:
+  virtual ~ConnectorWriteInfo() = default;
+};
+
 /// Interface for the commit info of the connector.
 class ConnectorCommitInfo {
  public:
@@ -114,10 +119,9 @@ class WriteProtocol {
   /// Return parameters for writers. Ex., write and commit locations. Return
   /// nullptr if the writer does not need parameters from the write protocol.
   virtual std::shared_ptr<const WriterParameters> getWriterParameters(
-      const std::shared_ptr<const velox::connector::ConnectorInsertTableHandle>&
-          tableHandle,
-      const velox::connector::ConnectorQueryCtx* FOLLY_NONNULL
-          connectorQueryCtx) const = 0;
+      const std::shared_ptr<const ConnectorInsertTableHandle>& tableHandle,
+      const ConnectorQueryCtx* FOLLY_NONNULL connectorQueryCtx,
+      const std::shared_ptr<const ConnectorWriteInfo>& writeInfo) const = 0;
 
   /// Register a WriteProtocol implementation for the given CommitStrategy. If
   /// the CommitStrategy has already been registered, it will replace the old
@@ -146,10 +150,10 @@ class DefaultWriteProtocol : public WriteProtocol {
       velox::memory::MemoryPool* FOLLY_NONNULL pool) override;
 
   std::shared_ptr<const WriterParameters> getWriterParameters(
-      const std::shared_ptr<const velox::connector::ConnectorInsertTableHandle>&
-          tableHandle,
-      const velox::connector::ConnectorQueryCtx* FOLLY_NONNULL
-          connectorQueryCtx) const override {
+      const std::shared_ptr<const ConnectorInsertTableHandle>& tableHandle,
+      const ConnectorQueryCtx* FOLLY_NONNULL connectorQueryCtx,
+      const std::shared_ptr<const ConnectorWriteInfo>& writeInfo)
+      const override {
     return std::make_shared<WriterParameters>();
   }
 };

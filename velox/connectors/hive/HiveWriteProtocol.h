@@ -31,6 +31,12 @@ class HiveWriterParameters : public WriterParameters {
 
   /// @param updateMode Write the files to a new directory, or append to an
   /// existing directory or overwrite an existing directory.
+  /// @param partitionName The name of partition if any that the writer writes
+  /// for. It is the partition subdirectory under the table directory, in the
+  /// format of
+  /// part_key_0=part_value_0/part_key_1=part_value_1/part_key_2=part_value_2.
+  /// So targetDirectory and writeDirectory end with partitionName if
+  /// partitionName exists.
   /// @param targetFileName The final name of a file after committing.
   /// @param targetDirectory The final directory that a file should be in after
   /// committing.
@@ -42,12 +48,14 @@ class HiveWriterParameters : public WriterParameters {
   /// writeDirectory to targetDirectory by default.
   HiveWriterParameters(
       UpdateMode updateMode,
+      std::optional<std::string> partitionName,
       std::string targetFileName,
       std::string targetDirectory,
       std::optional<std::string> writeFileName = std::nullopt,
       std::optional<std::string> writeDirectory = std::nullopt)
       : WriterParameters(),
         updateMode_(updateMode),
+        partitionName_(std::move(partitionName)),
         targetFileName_(std::move(targetFileName)),
         targetDirectory_(std::move(targetDirectory)),
         writeFileName_(writeFileName.value_or(targetFileName_)),
@@ -57,17 +65,10 @@ class HiveWriterParameters : public WriterParameters {
     return updateMode_;
   }
 
-  static std::string updateModeToString(UpdateMode updateMode) {
-    switch (updateMode) {
-      case UpdateMode::kNew:
-        return "NEW";
-      case UpdateMode::kAppend:
-        return "APPEND";
-      case UpdateMode::kOverwrite:
-        return "OVERWRITE";
-      default:
-        VELOX_UNSUPPORTED("Unsupported update mode.");
-    }
+  static std::string updateModeToString(UpdateMode updateMode);
+
+  const std::optional<std::string>& partitionName() const {
+    return partitionName_;
   }
 
   const std::string& targetFileName() const {
@@ -88,10 +89,27 @@ class HiveWriterParameters : public WriterParameters {
 
  private:
   const UpdateMode updateMode_;
+  const std::optional<std::string> partitionName_;
   const std::string targetFileName_;
   const std::string targetDirectory_;
   const std::string writeFileName_;
   const std::string writeDirectory_;
+};
+
+/// Write info of Hive connector. Ex., partition info that is required to
+/// assemble Hive writer parameters.
+class HiveConnectorWriteInfo : public ConnectorWriteInfo {
+ public:
+  explicit HiveConnectorWriteInfo(
+      std::optional<std::string> partitionName = std::nullopt)
+      : partitionName_(std::move(partitionName)) {}
+
+  const std::optional<std::string>& partitionName() const {
+    return partitionName_;
+  }
+
+ private:
+  const std::optional<std::string> partitionName_;
 };
 
 /// Commit info of Hive connector.
@@ -101,18 +119,18 @@ class HiveConnectorCommitInfo : public ConnectorCommitInfo {
   /// will pass this info to commit.
   explicit HiveConnectorCommitInfo(
       std::vector<std::shared_ptr<const HiveWriterParameters>> writerParameters)
-      : writeParameters_(std::move(writerParameters)) {}
+      : writerParameters_(std::move(writerParameters)) {}
 
   ~HiveConnectorCommitInfo() override = default;
 
   const std::vector<std::shared_ptr<const HiveWriterParameters>>&
   writerParameters() const {
-    return writeParameters_;
+    return writerParameters_;
   }
 
  private:
   const std::vector<std::shared_ptr<const HiveWriterParameters>>
-      writeParameters_;
+      writerParameters_;
 };
 
 /// WriteProtocol base implementation for Hive writes. WriterParameters have the
@@ -127,10 +145,10 @@ class HiveNoCommitWriteProtocol : public DefaultWriteProtocol {
   }
 
   std::shared_ptr<const WriterParameters> getWriterParameters(
-      const std::shared_ptr<const velox::connector::ConnectorInsertTableHandle>&
-          tableHandle,
-      const velox::connector::ConnectorQueryCtx* FOLLY_NONNULL
-          connectorQueryCtx) const override;
+      const std::shared_ptr<const ConnectorInsertTableHandle>& tableHandle,
+      const ConnectorQueryCtx* connectorQueryCtx,
+      const std::shared_ptr<const ConnectorWriteInfo>& writeInfo)
+      const override;
 
   static bool registerProtocol() {
     return registerWriteProtocol(
@@ -153,8 +171,9 @@ class HiveTaskCommitWriteProtocol : public DefaultWriteProtocol {
   std::shared_ptr<const WriterParameters> getWriterParameters(
       const std::shared_ptr<const velox::connector::ConnectorInsertTableHandle>&
           tableHandle,
-      const velox::connector::ConnectorQueryCtx* FOLLY_NONNULL
-          connectorQueryCtx) const override;
+      const velox::connector::ConnectorQueryCtx* connectorQueryCtx,
+      const std::shared_ptr<const ConnectorWriteInfo>& writeInfo)
+      const override;
 
   static bool registerProtocol() {
     return registerWriteProtocol(

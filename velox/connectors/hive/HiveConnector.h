@@ -198,19 +198,6 @@ class HiveDataSource : public DataSource {
   folly::Executor* FOLLY_NULLABLE executor_;
 };
 
-/// Hive connector configs
-class HiveConfig {
- public:
-  /// Can new data be inserted into existing partitions or existing
-  /// unpartitioned tables
-  static constexpr const char* FOLLY_NONNULL kImmutablePartitions =
-      "hive.immutable-partitions";
-
-  static bool isImmutablePartitions(const Config* FOLLY_NONNULL baseConfig) {
-    return baseConfig->get<bool>(kImmutablePartitions, true);
-  }
-};
-
 class HiveConnector final : public Connector {
  public:
   explicit HiveConnector(
