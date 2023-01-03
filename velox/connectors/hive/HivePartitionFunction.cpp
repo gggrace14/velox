@@ -209,6 +209,11 @@ void hashPrecomputed(
     hashes[i] = mix ? hashes[i] * 31 + precomputedHash : precomputedHash;
   }
 }
+
+inline uint32_t hashToBucket(uint32_t hash, int numBuckets) {
+  static const int32_t kInt32Max = std::numeric_limits<int32_t>::max();
+  return ((hash & kInt32Max) % numBuckets);
+}
 } // namespace
 
 HivePartitionFunction::HivePartitionFunction(
@@ -257,8 +262,7 @@ void HivePartitionFunction::partition(
   static const int32_t kInt32Max = std::numeric_limits<int32_t>::max();
 
   for (auto i = 0; i < numRows; ++i) {
-    partitions[i] =
-        bucketToPartition_[((hashes_[i] & kInt32Max) % numBuckets_)];
+    partitions[i] = bucketToPartition_[hashToBucket(hashes_[i], numBuckets_)];
   }
 }
 
@@ -276,6 +280,34 @@ void HivePartitionFunction::precompute(
   std::vector<uint32_t> hashes{1};
   hash(decodedVectors_[channelIndex], value.typeKind(), 1, false, hashes);
   precomputedHashes_[channelIndex] = hashes[0];
+}
+
+std::vector<uint32_t> HivePartitionFunction::bucket(
+    const std::vector<int64_t>& input,
+    int numBuckets) {
+  auto size = input.size();
+
+  std::vector<uint32_t> buckets(size);
+
+  for (auto i = 0; i < size; i++) {
+    buckets[i] = hashToBucket(hashInt64(input[i]), numBuckets);
+  }
+
+  return buckets;
+}
+
+std::vector<uint32_t> HivePartitionFunction::bucket(
+    const std::vector<StringView>& input,
+    int numBuckets) {
+  auto size = input.size();
+
+  std::vector<uint32_t> buckets(size);
+
+  for (auto i = 0; i < size; i++) {
+    buckets[i] = hashToBucket(hashBytes(input[i], 0), numBuckets);
+  }
+
+  return buckets;
 }
 
 } // namespace facebook::velox::connector::hive

@@ -623,6 +623,11 @@ class BigintRange final : public Filter {
 
   std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
 
+  std::vector<int64_t> values() const {
+    return isSingleValue_ ? std::vector<int64_t>{lower_}
+                          : std::vector<int64_t>();
+  }
+
   std::string toString() const final {
     return fmt::format(
         "BigintRange: [{}, {}] {}",
@@ -1317,6 +1322,11 @@ class BytesRange final : public AbstractRange {
     } else {
       return std::make_unique<BytesRange>(*this);
     }
+  }
+
+  std::vector<std::string> values() const {
+    return singleValue_ ? std::vector<std::string>{lower_}
+                        : std::vector<std::string>();
   }
 
   std::string toString() const final {
