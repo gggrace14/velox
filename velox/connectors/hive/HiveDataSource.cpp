@@ -19,6 +19,7 @@
 #include <string>
 #include <unordered_map>
 
+#include "velox/common/caching/CacheTTLController.h"
 #include "velox/dwio/common/CachedBufferedInput.h"
 #include "velox/dwio/common/DirectBufferedInput.h"
 #include "velox/dwio/common/ReaderFactory.h"
@@ -553,6 +554,14 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   }
 
   auto fileHandle = fileHandleFactory_->generate(split_->filePath).second;
+  // Here we keep adding new entries to the FileInfoMap when new fileHandles are
+  // generated. Creator of FileInfoMap (calling FileInfoMap::create()) is
+  // responsible for FileInfoMap size control, for example, by calling
+  // FileInfoMap::deleteNotCached.
+  auto* cacheTTLController = cache::CacheTTLController::getInstance();
+  if (cacheTTLController) {
+    cacheTTLController->addOpenFileInfo(fileHandle->uuid.id());
+  }
   auto input = createBufferedInput(*fileHandle, readerOpts_);
 
   if (splitReader_) {
