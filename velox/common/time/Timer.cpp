@@ -64,6 +64,11 @@ size_t getCurrentTimeMicro() {
           .count());
 }
 #else
+
+size_t getCurrentTimeSec() {
+  return duration_cast<seconds>(system_clock::now().time_since_epoch()).count();
+}
+
 size_t getCurrentTimeMs() {
   return duration_cast<milliseconds>(system_clock::now().time_since_epoch())
       .count();
