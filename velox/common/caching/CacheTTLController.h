@@ -19,6 +19,7 @@
 
 #include "folly/Synchronized.h"
 #include "folly/container/F14Map.h"
+#include "folly/container/F14Set.h"
 
 namespace facebook::velox::cache {
 
@@ -26,9 +27,11 @@ class AsyncDataCache;
 
 struct RawFileInfo {
   int64_t openTimeSec;
+  bool removeInProgress;
 
   bool operator==(const RawFileInfo& other) {
-    return openTimeSec == other.openTimeSec;
+    return openTimeSec == other.openTimeSec &&
+        removeInProgress == other.removeInProgress;
   }
 };
 
@@ -62,11 +65,21 @@ class CacheTTLController {
 
   CacheAgeStats getCacheAgeStats() const;
 
+  void applyTTL(int64_t ttlSecs);
+
  private:
   static std::unique_ptr<CacheTTLController> instance_;
 
  private:
   explicit CacheTTLController(AsyncDataCache& cache) : cache_(cache) {}
+
+  std::shared_ptr<const folly::F14FastSet<uint64_t>> getAndMarkAgedOutFiles(
+      int64_t maxOpenTimeSecs);
+
+  void removeAgedOutFiles(
+      const std::shared_ptr<const folly::F14FastSet<uint64_t>>& filesToRetain);
+
+  void reset();
 
   AsyncDataCache& cache_;
   folly::Synchronized<folly::F14FastMap<uint64_t, RawFileInfo>> fileInfoMap_;

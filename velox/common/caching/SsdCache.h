@@ -76,6 +76,11 @@ class SsdCache {
   /// have returned true.
   void write(std::vector<CachePin> pins);
 
+  bool removeFileEntries(
+      const std::function<std::shared_ptr<const folly::F14FastSet<uint64_t>>()>&
+          filesToRemove,
+      const std::shared_ptr<folly::F14FastSet<uint64_t>>& filesRetained);
+
   /// Returns stats aggregated from all shards.
   SsdCacheStats stats() const;
 
