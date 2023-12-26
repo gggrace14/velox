@@ -139,6 +139,8 @@ bool SsdCache::removeFileEntries(
     const folly::F14FastSet<uint64_t>& filesToRemove,
     folly::F14FastSet<uint64_t>& filesRetained) {
   if (!startWrite()) {
+    VELOX_SSD_CACHE_LOG(INFO)
+        << "Abort removing file entries due to another write in progress.";
     return false;
   }
 

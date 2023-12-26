@@ -483,9 +483,11 @@ void SsdFile::updateStats(SsdCacheStats& stats) const {
   stats.entriesRead += stats_.entriesRead;
   stats.bytesRead += stats_.bytesRead;
   stats.entriesCached += entries_.size();
-  stats.regionsCached += numRegions_;
   for (auto i = 0; i < numRegions_; i++) {
-    stats.bytesCached += (regionSizes_[i] - erasedRegionSizes_[i]);
+    if (regionSizes_[i] > 0) {
+      stats.regionsCached++;
+      stats.bytesCached += (regionSizes_[i] - erasedRegionSizes_[i]);
+    }
   }
   stats.entriesAgedOut += stats_.entriesAgedOut;
   stats.regionsAgedOut += stats_.regionsAgedOut;
@@ -577,7 +579,10 @@ bool SsdFile::removeFileEntries(
     clearRegionEntriesLocked(toFree);
     writableRegions_.reserve(writableRegions_.size() + toFree.size());
     for (int32_t region : toFree) {
-      writableRegions_.push_back(region);
+      if (std::find(writableRegions_.begin(), writableRegions_.end(), region) ==
+          writableRegions_.end()) {
+        writableRegions_.push_back(region);
+      }
     }
   }
 

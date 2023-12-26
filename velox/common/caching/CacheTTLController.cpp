@@ -35,10 +35,10 @@ bool CacheTTLController::addOpenFileInfo(
 }
 
 CacheAgeStats CacheTTLController::getCacheAgeStats() const {
-  auto lockedFileMap = fileInfoMap_.rlock();
+  const auto lockedFileMap = fileInfoMap_.rlock();
 
   if (lockedFileMap->empty()) {
-    return CacheAgeStats{.maxAgeSecs = 0};
+    return CacheAgeStats{.maxAgeSecs = 0, .numTrackedFiles = 0};
   }
 
   // Use the oldest file open time to calculate the max possible age of cache
@@ -49,7 +49,9 @@ CacheAgeStats CacheTTLController::getCacheAgeStats() const {
   }
 
   int64_t maxAge = getCurrentTimeSec() - minOpenTime;
-  return CacheAgeStats{.maxAgeSecs = std::max<int64_t>(maxAge, 0)};
+  return CacheAgeStats{
+      .maxAgeSecs = std::max<int64_t>(maxAge, 0),
+      .numTrackedFiles = lockedFileMap->size()};
 }
 
 void CacheTTLController::applyTTL(int64_t ttlSecs) {

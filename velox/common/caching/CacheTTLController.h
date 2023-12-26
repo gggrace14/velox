@@ -38,6 +38,8 @@ struct RawFileInfo {
 struct CacheAgeStats {
   // Age in seconds of the oldest opened file loaded to the caches.
   int64_t maxAgeSecs{0};
+  // Number of opened files with age tracked.
+  size_t numTrackedFiles{0};
 };
 
 /// A process-wide singleton to handle TTL of AsyncDataCache and SsdCache.
