@@ -97,13 +97,23 @@ uint32_t getVarbinaryLength(const Type& type) {
   VELOX_FAIL("Type is not Varbinary");
 }
 
+uint32_t getCharLength(const Type& type) {
+  if (type.isChar()) {
+    const auto& charType = type.asChar();
+    return charType.length();
+  }
+  VELOX_FAIL("Type is not Char");
+}
+
 uint32_t getVaryingLengthScalarTypeLength(const Type& type) {
   if (type.kind() == TypeKind::VARCHAR) {
     return getVarcharLength(type);
   } else if (type.kind() == TypeKind::VARBINARY) {
     return getVarbinaryLength(type);
+  } else if (type.kind() == TypeKind::CHAR) {
+    return getCharLength(type);
   }
-  VELOX_FAIL("Type is not Varchar or Varbinary");
+  VELOX_FAIL("Type is not Varchar or Varbinary or Char");
 }
 
 namespace {
@@ -152,6 +162,9 @@ TypePtr Type::create(const folly::dynamic& obj) {
   }
   if (isVarcharName(typeName)) {
     return VARCHAR(obj["length"].asInt());
+  }
+  if (isCharName(typeName)) {
+    return CHAR(obj["length"].asInt());
   }
   // Checks if 'typeName' specifies a custom type.
   if (customTypeExists(typeName)) {
@@ -929,6 +942,25 @@ TypePtr VARBINARY(uint32_t length) {
   return VarbinaryType::create(length);
 }
 
+template <>
+const std::shared_ptr<const CharType> CharType::create() {
+  VELOX_USER_FAIL("CHAR type without length is not supported.");
+}
+
+template <>
+const std::shared_ptr<const CharType> CharType::create(
+    uint32_t length) {
+  return std::make_shared<const CharType>(length);
+}
+
+TypePtr CHAR() {
+  return CharType::create();
+}
+
+TypePtr CHAR(uint32_t length) {
+  return CharType::create(length);
+}
+
 TypePtr UNKNOWN() {
   return TypeFactory<TypeKind::UNKNOWN>::create();
 }
@@ -952,6 +984,11 @@ TypePtr createScalarType<TypeKind::VARCHAR>() {
 template <>
 TypePtr createScalarType<TypeKind::VARBINARY>() {
   return VarbinaryType::create();
+}
+
+template <>
+TypePtr createScalarType<TypeKind::CHAR>() {
+  return CharType::create();
 }
 
 TypePtr createType(TypeKind kind, std::vector<TypePtr>&& children) {
@@ -999,6 +1036,11 @@ TypePtr createType<TypeKind::VARCHAR>(std::vector<TypePtr>&& /*children*/) {
 template <>
 TypePtr createType<TypeKind::VARBINARY>(std::vector<TypePtr>&& /*children*/) {
   return VARBINARY();
+}
+
+template <>
+TypePtr createType<TypeKind::CHAR>(std::vector<TypePtr>&& /*children*/) {
+  return CHAR();
 }
 
 template <>
@@ -1377,6 +1419,8 @@ class VaryingLengthParametricType {
       return VARCHAR(parameters[0].longLiteral.value());
     } else if constexpr (KIND == TypeKind::VARBINARY) {
       return VARBINARY(parameters[0].longLiteral.value());
+    } else if constexpr (KIND == TypeKind::CHAR) {
+      return CHAR(parameters[0].longLiteral.value());
     } else {
       VELOX_UNSUPPORTED("Unknown TypeKind for varying length parametric type.");
     }
@@ -1396,6 +1440,7 @@ const ParametricTypeMap& parametricBuiltinTypes() {
       {"FUNCTION", FunctionParametricType::create},
       {"VARCHAR", VaryingLengthParametricType<TypeKind::VARCHAR>::create},
       {"VARBINARY", VaryingLengthParametricType<TypeKind::VARBINARY>::create},
+      {"CHAR", VaryingLengthParametricType<TypeKind::CHAR>::create},
   };
   return kTypes;
 }

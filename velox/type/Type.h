@@ -72,10 +72,11 @@ enum class TypeKind : int8_t {
   BIGINT = 4,
   REAL = 5,
   DOUBLE = 6,
-  VARCHAR = 7,
-  VARBINARY = 8,
-  TIMESTAMP = 9,
-  HUGEINT = 10,
+  CHAR = 7,
+  VARCHAR = 8,
+  VARBINARY = 9,
+  TIMESTAMP = 10,
+  HUGEINT = 11,
   // Enum values for ComplexTypes start after 30 to leave
   // some values space to accommodate adding new scalar/native
   // types above.
@@ -85,7 +86,7 @@ enum class TypeKind : int8_t {
   UNKNOWN = 33,
   FUNCTION = 34,
   OPAQUE = 35,
-  INVALID = 36
+  INVALID = 36,
 };
 
 VELOX_DECLARE_ENUM_NAME(TypeKind);
@@ -113,6 +114,7 @@ template <TypeKind KIND>
 class VaryingLengthScalarType;
 using VarcharType = VaryingLengthScalarType<TypeKind::VARCHAR>;
 using VarbinaryType = VaryingLengthScalarType<TypeKind::VARBINARY>;
+using CharType = VaryingLengthScalarType<TypeKind::CHAR>;
 class ShortDecimalType;
 class LongDecimalType;
 class ArrayType;
@@ -260,6 +262,19 @@ struct TypeTraits<TypeKind::VARCHAR> {
   static constexpr bool isPrimitiveType = true;
   static constexpr bool isFixedWidth = false;
   static constexpr const char* name = "VARCHAR";
+};
+
+template <>
+struct TypeTraits<TypeKind::CHAR> {
+  using ImplType = CharType;
+  using NativeType = velox::StringView;
+  using DeepCopiedType = std::string;
+  static constexpr uint32_t minSubTypes = 0;
+  static constexpr uint32_t maxSubTypes = 0;
+  static constexpr TypeKind typeKind = TypeKind::CHAR;
+  static constexpr bool isPrimitiveType = true;
+  static constexpr bool isFixedWidth = false;
+  static constexpr const char* name = "CHAR";
 };
 
 template <>
@@ -585,10 +600,12 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
 
   const VarcharType& asVarchar() const;
   const VarbinaryType& asVarbinary() const;
+  const CharType& asChar() const;
   const ShortDecimalType& asShortDecimal() const;
   const LongDecimalType& asLongDecimal() const;
   bool isVarchar() const;
   bool isVarbinary() const;
+  bool isChar() const;
   bool isShortDecimal() const;
   bool isLongDecimal() const;
   bool isDecimal() const;
@@ -991,7 +1008,7 @@ uint32_t getVaryingLengthScalarTypeLength(const Type& type);
 FOLLY_ALWAYS_INLINE bool isVaryingLengthScalarType(const TypePtr& type) {
   VELOX_CHECK_NOT_NULL(type);
   return (
-      type->kind() == TypeKind::VARCHAR || type->kind() == TypeKind::VARBINARY);
+      type->kind() == TypeKind::VARCHAR || type->kind() == TypeKind::VARBINARY || type->kind() == TypeKind::CHAR);
 }
 
 // Functions for Varchar.
@@ -1023,6 +1040,21 @@ FOLLY_ALWAYS_INLINE bool isVarbinaryName(const std::string& name) {
 }
 
 uint32_t getVarbinaryLength(const Type& type);
+
+// Functions for Char.
+FOLLY_ALWAYS_INLINE const CharType& Type::asChar() const {
+  return dynamic_cast<const CharType&>(*this);
+}
+
+FOLLY_ALWAYS_INLINE bool Type::isChar() const {
+  return dynamic_cast<const CharType*>(this) != nullptr;
+}
+
+FOLLY_ALWAYS_INLINE bool isCharName(const std::string& name) {
+  return (name == "CHAR");
+}
+
+uint32_t getCharLength(const Type& type);
 
 class ArrayType : public TypeBase<TypeKind::ARRAY> {
  public:
@@ -1687,6 +1719,10 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
         return TEMPLATE_FUNC<::facebook::velox::TypeKind::VARBINARY>(         \
             __VA_ARGS__);                                                     \
       }                                                                       \
+      case ::facebook::velox::TypeKind::CHAR: {                               \
+        return TEMPLATE_FUNC<::facebook::velox::TypeKind::CHAR>(              \
+            __VA_ARGS__);                                                     \
+      }                                                                       \
       case ::facebook::velox::TypeKind::TIMESTAMP: {                          \
         return TEMPLATE_FUNC<::facebook::velox::TypeKind::TIMESTAMP>(         \
             __VA_ARGS__);                                                     \
@@ -1741,6 +1777,10 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
         return TEMPLATE_FUNC<T, ::facebook::velox::TypeKind::VARBINARY>( \
             __VA_ARGS__);                                                \
       }                                                                  \
+      case ::facebook::velox::TypeKind::CHAR: {                          \
+        return TEMPLATE_FUNC<T, ::facebook::velox::TypeKind::CHAR>(      \
+            __VA_ARGS__);                                                \
+      }                                                                  \
       case ::facebook::velox::TypeKind::TIMESTAMP: {                     \
         return TEMPLATE_FUNC<T, ::facebook::velox::TypeKind::TIMESTAMP>( \
             __VA_ARGS__);                                                \
@@ -1792,6 +1832,10 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
       }                                                                       \
       case ::facebook::velox::TypeKind::VARBINARY: {                          \
         return TEMPLATE_FUNC<T, ::facebook::velox::TypeKind::VARBINARY>(      \
+            __VA_ARGS__);                                                     \
+      }                                                                       \
+      case ::facebook::velox::TypeKind::CHAR: {                               \
+        return TEMPLATE_FUNC<T, ::facebook::velox::TypeKind::CHAR>(           \
             __VA_ARGS__);                                                     \
       }                                                                       \
       case ::facebook::velox::TypeKind::TIMESTAMP: {                          \
@@ -1878,6 +1922,10 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
       }                                                                        \
       case ::facebook::velox::TypeKind::VARCHAR: {                             \
         return PREFIX<::facebook::velox::TypeKind::VARCHAR> SUFFIX(            \
+            __VA_ARGS__);                                                      \
+      }                                                                        \
+      case ::facebook::velox::TypeKind::CHAR: {                                \
+        return PREFIX<::facebook::velox::TypeKind::CHAR> SUFFIX(               \
             __VA_ARGS__);                                                      \
       }                                                                        \
       case ::facebook::velox::TypeKind::VARBINARY: {                           \
@@ -1970,6 +2018,9 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
       case ::facebook::velox::TypeKind::VARBINARY: {                          \
         return CLASS<::facebook::velox::TypeKind::VARBINARY>::FIELD;          \
       }                                                                       \
+      case ::facebook::velox::TypeKind::CHAR: {                               \
+        return CLASS<::facebook::velox::TypeKind::CHAR>::FIELD;               \
+      }                                                                       \
       case ::facebook::velox::TypeKind::TIMESTAMP: {                          \
         return CLASS<::facebook::velox::TypeKind::TIMESTAMP>::FIELD;          \
       }                                                                       \
@@ -2018,6 +2069,9 @@ TypePtr VARCHAR(uint32_t length);
 TypePtr VARBINARY();
 TypePtr VARBINARY(uint32_t length);
 
+TypePtr CHAR();
+TypePtr CHAR(uint32_t length);
+
 TypePtr UNKNOWN();
 
 template <TypeKind KIND>
@@ -2030,6 +2084,9 @@ TypePtr createScalarType<TypeKind::VARCHAR>();
 
 template <>
 TypePtr createScalarType<TypeKind::VARBINARY>();
+
+template <>
+TypePtr createScalarType<TypeKind::CHAR>();
 
 TypePtr createScalarType(TypeKind kind);
 
@@ -2061,6 +2118,10 @@ std::shared_ptr<const Type> createType<TypeKind::VARCHAR>(
 
 template <>
 std::shared_ptr<const Type> createType<TypeKind::VARBINARY>(
+    std::vector<std::shared_ptr<const Type>>&& children);
+
+template <>
+std::shared_ptr<const Type> createType<TypeKind::CHAR>(
     std::vector<std::shared_ptr<const Type>>&& children);
 
 template <>
