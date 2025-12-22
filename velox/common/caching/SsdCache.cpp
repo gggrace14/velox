@@ -158,22 +158,29 @@ void SsdCache::checkpoint() {
 
 bool SsdCache::removeFileEntries(
     const folly::F14FastSet<uint64_t>& filesToRemove,
-    folly::F14FastSet<uint64_t>& filesRetained) {
-  if (!startWrite()) {
-    return false;
-  }
-
-  bool success = true;
-  for (auto i = 0; i < numShards_; i++) {
-    try {
-      success &= files_[i]->removeFileEntries(filesToRemove, filesRetained);
-    } catch (const std::exception& e) {
-      VELOX_SSD_CACHE_LOG(ERROR)
-          << "Error removing file entries from SSD shard "
-          << files_[i]->shardId() << ": " << e.what();
-      success = false;
+    folly::F14FastSet<uint64_t>& filesRetained,
+    int64_t maxAttempts) {
+  int numTries = 0;
+  bool success = false;
+  while (!success && numTries < maxAttempts) {
+    ++numTries;
+    std::this_thread::sleep_for(kRemoveWaitMs);
+    if (!startWrite()) {
+      continue;
     }
-    --writesInProgress_;
+
+    success = true;
+    for (auto i = 0; i < numShards_; i++) {
+      try {
+        success &= files_[i]->removeFileEntries(filesToRemove, filesRetained);
+      } catch (const std::exception& e) {
+        VELOX_SSD_CACHE_LOG(ERROR)
+            << "Error removing file entries from SSD shard "
+            << files_[i]->shardId() << ": " << e.what();
+        success = false;
+      }
+      --writesInProgress_;
+    }
   }
   return success;
 }

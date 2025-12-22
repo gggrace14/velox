@@ -76,7 +76,9 @@ class CacheTTLController {
   /// Compute age related stats of the cached files.
   CacheAgeStats getCacheAgeStats() const;
 
-  void applyTTL(int64_t ttlSecs);
+  void applyTTL(int64_t ttlSecs, int64_t maxAttempts = 1);
+
+  std::chrono::milliseconds getAttemptInterval() const;
 
  private:
   /// A process-wide singleton instance of CacheTTLController.

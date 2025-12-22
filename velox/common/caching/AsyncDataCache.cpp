@@ -938,7 +938,8 @@ void AsyncDataCache::saveToSsd(bool saveAll) {
 
 bool AsyncDataCache::removeFileEntries(
     const folly::F14FastSet<uint64_t>& filesToRemove,
-    folly::F14FastSet<uint64_t>& filesRetained) {
+    folly::F14FastSet<uint64_t>& filesRetained,
+    int64_t maxAttempts) {
   bool success = true;
 
   for (auto& shard : shards_) {
@@ -952,7 +953,8 @@ bool AsyncDataCache::removeFileEntries(
   }
 
   if (ssdCache_) {
-    success &= ssdCache_->removeFileEntries(filesToRemove, filesRetained);
+    success &=
+        ssdCache_->removeFileEntries(filesToRemove, filesRetained, maxAttempts);
   }
   return success;
 }

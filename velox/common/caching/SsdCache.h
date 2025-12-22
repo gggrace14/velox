@@ -83,6 +83,9 @@ class SsdCache {
     }
   };
 
+  /// Interval for waiting between two attempts to remove SsdFile entries.
+  static constexpr auto kRemoveWaitMs = std::chrono::milliseconds(500);
+
   /// Constructs a cache with backing files at path 'filePrefix'.<ordinal>.
   /// <ordinal> ranges from 0 to 'numShards' - 1.
   /// 'maxBytes' is the total capacity of the cache. This is rounded up to the
@@ -134,11 +137,13 @@ class SsdCache {
 
   /// Removes cached entries from all SsdFiles for files in the fileNum set
   /// 'filesToRemove'. If successful, return true, and 'filesRetained' contains
-  /// entries that should not be removed, ex., from pinned regions. Otherwise,
-  /// return false and 'filesRetained' could be ignored.
+  /// entries that should not be removed, ex., from pinned regions. Make at most
+  /// maxAttempts, or return false in which case 'filesRetained' could be
+  /// ignored.
   bool removeFileEntries(
       const folly::F14FastSet<uint64_t>& filesToRemove,
-      folly::F14FastSet<uint64_t>& filesRetained);
+      folly::F14FastSet<uint64_t>& filesRetained,
+      int64_t maxAttempts = 1);
 
   /// Returns stats aggregated from all shards.
   SsdCacheStats stats() const;

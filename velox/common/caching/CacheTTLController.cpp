@@ -16,7 +16,9 @@
 
 #include "velox/common/caching/CacheTTLController.h"
 
+#include "SsdCache.h"
 #include "velox/common/caching/AsyncDataCache.h"
+#include "velox/common/caching/SsdCache.h"
 
 namespace facebook::velox::cache {
 
@@ -52,10 +54,10 @@ CacheAgeStats CacheTTLController::getCacheAgeStats() const {
   return CacheAgeStats{.maxAgeSecs = std::max<int64_t>(maxAge, 0)};
 }
 
-void CacheTTLController::applyTTL(int64_t ttlSecs) {
+void CacheTTLController::applyTTL(int64_t ttlSecs, int64_t maxAttempts) {
   int64_t maxOpenTime = getCurrentTimeSec() - ttlSecs;
 
-  folly::F14FastSet<uint64_t> filesToRemove =
+  const folly::F14FastSet<uint64_t> filesToRemove =
       getAndMarkAgedOutFiles(maxOpenTime);
   if (filesToRemove.empty()) {
     LOG(INFO) << "No cache entry is out of TTL " << ttlSecs << ".";
@@ -63,7 +65,8 @@ void CacheTTLController::applyTTL(int64_t ttlSecs) {
   }
 
   folly::F14FastSet<uint64_t> filesRetained;
-  bool success = cache_.removeFileEntries(filesToRemove, filesRetained);
+  bool success =
+      cache_.removeFileEntries(filesToRemove, filesRetained, maxAttempts);
 
   LOG(INFO) << (success ? "Succeeded" : "Failed") << " applying cache TTL of "
             << ttlSecs << " seconds. Entries from " << filesToRemove.size()
@@ -74,6 +77,10 @@ void CacheTTLController::applyTTL(int64_t ttlSecs) {
   } else {
     reset();
   }
+}
+
+std::chrono::milliseconds CacheTTLController::getAttemptInterval() const {
+  return SsdCache::kRemoveWaitMs;
 }
 
 folly::F14FastSet<uint64_t> CacheTTLController::getAndMarkAgedOutFiles(

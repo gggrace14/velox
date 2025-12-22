@@ -874,7 +874,8 @@ class AsyncDataCache : public memory::Cache {
   /// mode. Otherwise, return false and 'filesRetained' could be ignored.
   bool removeFileEntries(
       const folly::F14FastSet<uint64_t>& filesToRemove,
-      folly::F14FastSet<uint64_t>& filesRetained);
+      folly::F14FastSet<uint64_t>& filesRetained,
+      int64_t maxAttempts = 1);
 
   /// Drops all unpinned entries. Pins stay valid.
   ///
